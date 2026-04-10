@@ -13,7 +13,24 @@ GenICam.Net is a .NET 8 implementation of the [GenICam](https://www.emva.org/sta
   - `NodeBase.cs`, `ValueNode.cs` — Abstract base classes for the node hierarchy
   - `NodeMap.cs` — Central node registry implementing INodeMap
   - `NodeMapParser.cs` — XML parser that reads GenICam camera description files
-- **Planned modules**: SFNC (Standard Feature Naming Convention), GenTL (Generic Transport Layer), GigE Vision protocol
+- **GigE Vision module** (`src/GenICam.Net/GigEVision/`) — implements the GigE Vision protocol:
+  - `Gvcp/` — GigE Vision Control Protocol (UDP port 3956):
+    - `GvcpConstants.cs` — Protocol constants (port, key, header sizes, timeout)
+    - `GvcpCommandType.cs`, `GvcpStatus.cs` — Command/status enums per specification
+    - `GvcpHeader.cs` — Command and acknowledgement header structs (big-endian)
+    - `GvcpPackets.cs` — Static builder/parser methods for all command/ack pairs
+    - `GvcpClient.cs` — Async client for register and memory read/write operations
+    - `GigEPort.cs` — `IPort` implementation that bridges the GenApi node tree to GVCP
+    - `GigEDiscovery.cs` — Broadcasts DISCOVERY_CMD and collects camera responses
+    - `GigECameraInfo.cs` — Discovered camera record (IP, MAC, model, vendor, serial)
+    - `IUdpTransport.cs` — Transport abstraction over UdpClient for testability
+    - `GvcpException.cs` — Exception type with `GvcpStatus` property
+  - `Gvsp/` — GigE Vision Stream Protocol:
+    - `GvspConstants.cs` — Packet type and payload type enums, header sizes
+    - `GvspPackets.cs` — Header, ImageLeader, and ImageTrailer structs (big-endian)
+    - `GvspFrame.cs` — Immutable assembled frame with image metadata and pixel data
+    - `GvspReceiver.cs` — Reassembles frames from streamed packets, raises `FrameReceived` event
+- **Planned modules**: SFNC (Standard Feature Naming Convention), GenTL (Generic Transport Layer)
 
 ## Build & Test
 
@@ -56,6 +73,14 @@ dotnet test
 - `IPort` is the bridge between the node tree and physical hardware
 - Implement `IPort.Read`/`Write` for a specific transport (GigE Vision, USB3 Vision, etc.)
 - Call `NodeMap.Connect(port)` to wire register and command nodes to the port
+
+### GigE Vision Conventions
+- All GVCP/GVSP packet fields use big-endian byte order via `BinaryPrimitives`
+- `IUdpTransport` abstracts raw UDP I/O so all GVCP and GVSP classes are unit-testable without real sockets
+- `GvcpClient` is the primary async API; `GigEPort` wraps it as an `IPort` for GenApi integration
+- `GigEPort` chunks reads/writes exceeding `GvcpConstants.MaxBlockSize` (512 bytes) into multiple requests
+- `GvspReceiver` collects packets by `BlockId`, sorts by `PacketId`, and emits completed frames via the `FrameReceived` event
+- Discovery broadcasts to `255.255.255.255:3956` and collects ACKs within a configurable timeout
 
 ## Standards Reference
 - GenICam GenApi: Camera description XML schema, node types, register model

@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFrameworks>net8.0;net9.0</TargetFrameworks>
@@ -8,21 +8,19 @@
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
     <FileVersion>1.0.0.0</FileVersion>
     <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
-    <PackageId>GenICam.Net</PackageId>
+    <PackageId>GigEVision.Net</PackageId>
     <Authors>GenICam.Net Contributors</Authors>
-    <Description>.NET 8/9 implementation of the GenICam GenApi standard for industrial camera integration.</Description>
+    <Description>.NET 8/9 implementation of the GigE Vision protocol (GVCP and GVSP) for industrial camera control and image streaming.</Description>
     <RepositoryUrl>https://github.com/Irvinaby/GenICam.Net</RepositoryUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="GenICam.Net.Tests" />
     <InternalsVisibleTo Include="GigEVision.Net.Tests" />
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="..\..\README.md" Pack="true" PackagePath="" />
+    <ProjectReference Include="..\GenICam.Net\GenICam.Net.csproj" />
   </ItemGroup>
 
 </Project>
