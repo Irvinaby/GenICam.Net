@@ -1,0 +1,36 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{82D55C67-249B-4589-B5F6-7E8044915117}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GenICam.Net", "src\GenICam.Net\GenICam.Net.csproj", "{16DA4EF1-EB30-4851-8E07-E0C97B3CEBF8}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{40D83C79-0EEA-4345-A1F6-097EEACD1D04}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GenICam.Net.Tests", "tests\GenICam.Net.Tests\GenICam.Net.Tests.csproj", "{1884F82A-2F84-49DC-9B3B-33B5B1B66CD4}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{16DA4EF1-EB30-4851-8E07-E0C97B3CEBF8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{16DA4EF1-EB30-4851-8E07-E0C97B3CEBF8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{16DA4EF1-EB30-4851-8E07-E0C97B3CEBF8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{16DA4EF1-EB30-4851-8E07-E0C97B3CEBF8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1884F82A-2F84-49DC-9B3B-33B5B1B66CD4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1884F82A-2F84-49DC-9B3B-33B5B1B66CD4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1884F82A-2F84-49DC-9B3B-33B5B1B66CD4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1884F82A-2F84-49DC-9B3B-33B5B1B66CD4}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{16DA4EF1-EB30-4851-8E07-E0C97B3CEBF8} = {82D55C67-249B-4589-B5F6-7E8044915117}
+		{1884F82A-2F84-49DC-9B3B-33B5B1B66CD4} = {40D83C79-0EEA-4345-A1F6-097EEACD1D04}
+	EndGlobalSection
+EndGlobal
