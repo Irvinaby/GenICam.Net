@@ -1,0 +1,148 @@
+<UserControl x:Class="CameraViewer.Views.NodeTreeView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:CameraViewer.ViewModels"
+             xmlns:genicam="clr-namespace:GenICam.Net.GenApi;assembly=GenICam.Net">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Section header -->
+        <Border Grid.Row="0"
+                Background="#2A2A3E"
+                BorderBrush="#44445A" BorderThickness="1,1,1,0"
+                CornerRadius="4,4,0,0" Padding="8,6">
+            <TextBlock Text="Node Tree" Style="{StaticResource SectionHeader}" Margin="0"/>
+        </Border>
+
+        <!-- Filter toolbar -->
+        <Border Grid.Row="1"
+                Background="#2A2A3E"
+                BorderBrush="#44445A" BorderThickness="1,0,1,0"
+                Padding="6,4">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0" Text="🔍"
+                           VerticalAlignment="Center" Margin="0,0,4,0"/>
+
+                <TextBox Grid.Column="1"
+                         Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}"
+                         VerticalAlignment="Center"/>
+
+                <TextBlock Grid.Column="2"
+                           Text="Visibility:"
+                           VerticalAlignment="Center"
+                           Margin="8,0,4,0"
+                           Style="{StaticResource MutedText}"/>
+
+                <ComboBox Grid.Column="3"
+                          SelectedValue="{Binding VisibilityFilter}"
+                          SelectedValuePath="Tag"
+                          MinWidth="85">
+                    <ComboBoxItem Content="Beginner" Tag="{x:Static genicam:Visibility.Beginner}"/>
+                    <ComboBoxItem Content="Expert"   Tag="{x:Static genicam:Visibility.Expert}"/>
+                    <ComboBoxItem Content="Guru"     Tag="{x:Static genicam:Visibility.Guru}"/>
+                </ComboBox>
+            </Grid>
+        </Border>
+
+        <!-- Tree -->
+        <TreeView Grid.Row="2"
+                  ItemsSource="{Binding Categories}"
+                  BorderThickness="1,0,1,1"
+                  CornerRadius="0,0,4,4">
+            <TreeView.Resources>
+
+                <!-- Category template (expandable) -->
+                <HierarchicalDataTemplate DataType="{x:Type vm:NodeViewModel}"
+                                          ItemsSource="{Binding Children}">
+                    <Grid Margin="2,1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Name / display text -->
+                        <TextBlock Grid.Column="0"
+                                   Text="{Binding DisplayName}"
+                                   FontWeight="SemiBold"
+                                   Visibility="{Binding IsCategory, Converter={StaticResource BoolToVisibility}}"/>
+
+                        <!-- Leaf node: name + value editor -->
+                        <StackPanel Grid.Column="0" Orientation="Horizontal"
+                                    Visibility="{Binding IsCategory, Converter={StaticResource BoolToVisibility}, ConverterParameter=Invert}">
+                            <TextBlock Text="{Binding DisplayName}"
+                                       Width="160" TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center"
+                                       ToolTip="{Binding ToolTip}"/>
+
+                            <!-- Integer editor -->
+                            <TextBox Text="{Binding IntegerValue, UpdateSourceTrigger=LostFocus}"
+                                     Width="90"
+                                     IsReadOnly="{Binding IsReadOnly}"
+                                     ToolTip="{Binding ToolTip}"
+                                     Visibility="{Binding IsInteger, Converter={StaticResource BoolToVisibility}}"/>
+
+                            <!-- Float editor -->
+                            <TextBox Text="{Binding FloatValue, UpdateSourceTrigger=LostFocus, StringFormat=G6}"
+                                     Width="90"
+                                     IsReadOnly="{Binding IsReadOnly}"
+                                     ToolTip="{Binding ToolTip}"
+                                     Visibility="{Binding IsFloat, Converter={StaticResource BoolToVisibility}}"/>
+
+                            <!-- Boolean editor -->
+                            <CheckBox IsChecked="{Binding BoolValue}"
+                                      IsEnabled="{Binding IsWritable}"
+                                      VerticalAlignment="Center"
+                                      Visibility="{Binding IsBoolean, Converter={StaticResource BoolToVisibility}}"/>
+
+                            <!-- String editor -->
+                            <TextBox Text="{Binding StringValue, UpdateSourceTrigger=LostFocus}"
+                                     Width="120"
+                                     IsReadOnly="{Binding IsReadOnly}"
+                                     Visibility="{Binding IsString, Converter={StaticResource BoolToVisibility}}"/>
+
+                            <!-- Enumeration editor -->
+                            <ComboBox ItemsSource="{Binding EnumEntries}"
+                                      SelectedItem="{Binding EnumValue}"
+                                      IsEnabled="{Binding IsWritable}"
+                                      MinWidth="100"
+                                      Visibility="{Binding IsEnum, Converter={StaticResource BoolToVisibility}}"/>
+
+                            <!-- Command button -->
+                            <Button Command="{Binding ExecuteCommandCommand}"
+                                    Padding="6,2" FontSize="11"
+                                    Visibility="{Binding IsCommand, Converter={StaticResource BoolToVisibility}}">
+                                ▶ Execute
+                            </Button>
+                        </StackPanel>
+
+                        <!-- Unit label -->
+                        <TextBlock Grid.Column="1"
+                                   Text="{Binding IntegerUnit}"
+                                   Style="{StaticResource MutedText}"
+                                   Margin="4,0,0,0" VerticalAlignment="Center"
+                                   Visibility="{Binding IsInteger, Converter={StaticResource BoolToVisibility}}"/>
+                        <TextBlock Grid.Column="1"
+                                   Text="{Binding FloatUnit}"
+                                   Style="{StaticResource MutedText}"
+                                   Margin="4,0,0,0" VerticalAlignment="Center"
+                                   Visibility="{Binding IsFloat, Converter={StaticResource BoolToVisibility}}"/>
+                    </Grid>
+                </HierarchicalDataTemplate>
+
+            </TreeView.Resources>
+        </TreeView>
+
+    </Grid>
+</UserControl>
