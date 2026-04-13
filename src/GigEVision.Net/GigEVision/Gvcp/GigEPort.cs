@@ -49,7 +49,8 @@ public class GigEPort : IPort
         while (remaining > 0)
         {
             var chunkSize = Math.Min(remaining, GvcpConstants.MaxBlockSize);
-            var chunk = _client.ReadMemoryAsync((uint)(address + offset), chunkSize).GetAwaiter().GetResult();
+            var addr = (uint)(address + offset);
+            var chunk = Task.Run(() => _client.ReadMemoryAsync(addr, chunkSize)).GetAwaiter().GetResult();
             chunk.CopyTo(result, offset);
             offset += chunkSize;
             remaining -= chunkSize;
@@ -73,7 +74,8 @@ public class GigEPort : IPort
             var chunkSize = Math.Min(remaining, GvcpConstants.MaxBlockSize);
             var chunk = new byte[chunkSize];
             Array.Copy(data, offset, chunk, 0, chunkSize);
-            _client.WriteMemoryAsync((uint)(address + offset), chunk).GetAwaiter().GetResult();
+            var addr = (uint)(address + offset);
+            Task.Run(() => _client.WriteMemoryAsync(addr, chunk)).GetAwaiter().GetResult();
             offset += chunkSize;
             remaining -= chunkSize;
         }

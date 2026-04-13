@@ -88,12 +88,17 @@ public sealed partial class MainViewModel : ObservableObject
             return;
         }
 
-        NodeTreeVm.Load(_nodeMap);
-
         // Connect the node map to the GigE Vision port so commands and registers reach the camera
         var port = new GigEPort(_gvcpClient);
         _nodeMap.Connect(port);
         _logger.LogInformation("Node map connected to GigE port for {Model} ({IpAddress})", cam.ModelName, cam.IpAddress);
+
+        // Pre-cache all register-backed node values so expanding the tree doesn't block
+        ConnectionStatus = $"Reading node values from {cam.IpAddress}…";
+        await Task.Run(() => PrefetchNodeValues(_nodeMap));
+
+        // Load the tree after port is connected and values are cached
+        NodeTreeVm.Load(_nodeMap);
 
         Title = $"CameraViewer — {cam.ManufacturerName} {cam.ModelName} ({cam.IpAddress})";
         ConnectionStatus = $"Connected: {cam.ManufacturerName} {cam.ModelName}";
@@ -294,6 +299,37 @@ public sealed partial class MainViewModel : ObservableObject
         if (hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
             hex = hex[2..];
         return Convert.ToUInt32(hex, 16);
+    }
+
+    /// <summary>
+    /// Pre-reads all register-backed node values so they are cached and the UI doesn't block.
+    /// Runs on a background thread.
+    /// </summary>
+    private void PrefetchNodeValues(NodeMap nodeMap)
+    {
+        var count = 0;
+        foreach (var node in nodeMap.Nodes)
+        {
+            try
+            {
+                // Simply reading the value triggers the register read and populates the cache
+                _ = node switch
+                {
+                    IInteger i => i.Value.ToString(),
+                    IFloat f => f.Value.ToString(),
+                    IBoolean b => b.Value.ToString(),
+                    IString s => s.Value,
+                    IEnumeration e => e.Value,
+                    _ => null
+                };
+                count++;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Prefetch failed for node {Name}", node.Name);
+            }
+        }
+        _logger.LogInformation("Prefetched values for {Count} nodes", count);
     }
 
     private static IPAddress GetLocalIpForCamera(IPAddress cameraIp)
