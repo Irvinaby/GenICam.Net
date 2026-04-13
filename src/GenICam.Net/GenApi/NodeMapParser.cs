@@ -186,9 +186,26 @@ public static class NodeMapParser
 
         node.Unit = element.Element(ns + "Unit")?.Value ?? string.Empty;
 
-        // IntReg specific
+        // pValue: reference to another node providing the value
+        node.PValueNodeName = element.Element(ns + "pValue")?.Value;
+
+        // IntReg/MaskedIntReg specific: register address and length
         var address = element.Element(ns + "Address")?.Value;
-        if (address != null) node.SetValueDirect(0); // Will be read from register
+        if (address != null)
+            node.RegisterAddress = ParseLong(address);
+
+        var pAddress = element.Element(ns + "pAddress")?.Value;
+        if (pAddress != null && node.RegisterAddress is null)
+            node.RegisterAddress = 0; // Will be resolved later if needed
+
+        var length = element.Element(ns + "Length")?.Value;
+        if (length != null)
+            node.RegisterLength = ParseLong(length);
+
+        var endianness = element.Element(ns + "Endianess")?.Value
+                      ?? element.Element(ns + "Endianness")?.Value;
+        if (endianness != null && Enum.TryParse<Endianness>(endianness, true, out var end))
+            node.Endianness = end;
 
         // SwissKnife formula
         var formula = element.Element(ns + "Formula")?.Value;
@@ -233,6 +250,23 @@ public static class NodeMapParser
             node.Representation = r;
 
         node.Unit = element.Element(ns + "Unit")?.Value ?? string.Empty;
+
+        // pValue: reference to another node providing the value
+        node.PValueNodeName = element.Element(ns + "pValue")?.Value;
+
+        // FloatReg specific: register address and length
+        var fAddress = element.Element(ns + "Address")?.Value;
+        if (fAddress != null)
+            node.RegisterAddress = ParseLong(fAddress);
+
+        var fLength = element.Element(ns + "Length")?.Value;
+        if (fLength != null)
+            node.RegisterLength = ParseLong(fLength);
+
+        var fEndianness = element.Element(ns + "Endianess")?.Value
+                       ?? element.Element(ns + "Endianness")?.Value;
+        if (fEndianness != null && Enum.TryParse<Endianness>(fEndianness, true, out var fEnd))
+            node.Endianness = fEnd;
 
         var formula = element.Element(ns + "Formula")?.Value;
         if (formula != null) node.Formula = formula;
@@ -302,6 +336,9 @@ public static class NodeMapParser
         if (value != null)
             node.SetValueDirect(value);
 
+        // pValue: reference to a register providing the numeric value
+        node.PValueNodeName = element.Element(ns + "pValue")?.Value;
+
         return node;
     }
 
@@ -314,7 +351,8 @@ public static class NodeMapParser
         if (cmdValue != null)
             node.CommandValue = ParseLong(cmdValue);
 
-        node.RegisterNodeName = element.Element(ns + "pValue")?.Value;
+        node.RegisterNodeName = element.Element(ns + "pValue")?.Value
+                             ?? element.Element(ns + "pCommandRegister")?.Value;
 
         return node;
     }

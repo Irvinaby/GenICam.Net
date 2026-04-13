@@ -23,17 +23,13 @@ public class CommandNode : NodeBase, ICommand
             if (NodeMap is null || RegisterNodeName is null)
                 return true;
 
-            var register = NodeMap.GetNode(RegisterNodeName) as IRegister;
-            if (register is null)
-                return true;
-
-            var data = register.Get(register.Length);
-            var value = register.Length switch
+            var target = NodeMap.GetNode(RegisterNodeName);
+            return target switch
             {
-                4 => BinaryPrimitives.ReadInt32BigEndian(data),
-                _ => 0L
+                IRegister reg => !IsRegisterValue(reg, CommandValue),
+                IInteger intNode => intNode.Value != CommandValue,
+                _ => true
             };
-            return value != CommandValue;
         }
     }
 
@@ -45,24 +41,44 @@ public class CommandNode : NodeBase, ICommand
         if (NodeMap is null || RegisterNodeName is null)
             return;
 
-        var register = NodeMap.GetNode(RegisterNodeName) as IRegister;
-        if (register is null)
-            return;
-
-        var data = new byte[register.Length];
-        switch (register.Length)
+        var target = NodeMap.GetNode(RegisterNodeName);
+        switch (target)
         {
-            case 4:
-                BinaryPrimitives.WriteInt32BigEndian(data, (int)CommandValue);
+            case IRegister reg:
+                WriteToRegister(reg, CommandValue);
                 break;
-            case 8:
-                BinaryPrimitives.WriteInt64BigEndian(data, CommandValue);
-                break;
-            default:
-                data[0] = (byte)CommandValue;
+            case IInteger intNode:
+                intNode.Value = CommandValue;
                 break;
         }
+    }
 
-        register.Set(data);
+    private static bool IsRegisterValue(IRegister reg, long expected)
+    {
+        var data = reg.Get(reg.Length);
+        var value = reg.Length switch
+        {
+            4 => BinaryPrimitives.ReadInt32BigEndian(data),
+            _ => 0L
+        };
+        return value == expected;
+    }
+
+    private static void WriteToRegister(IRegister reg, long value)
+    {
+        var data = new byte[reg.Length];
+        switch (reg.Length)
+        {
+            case 4:
+                BinaryPrimitives.WriteInt32BigEndian(data, (int)value);
+                break;
+            case 8:
+                BinaryPrimitives.WriteInt64BigEndian(data, value);
+                break;
+            default:
+                data[0] = (byte)value;
+                break;
+        }
+        reg.Set(data);
     }
 }

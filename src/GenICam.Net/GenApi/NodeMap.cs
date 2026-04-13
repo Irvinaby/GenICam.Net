@@ -88,6 +88,18 @@ public class NodeMap : INodeMap
             node.Port = port;
         }
 
+        // Wire port to IntegerNode/FloatNode that have register addresses (IntReg/FloatReg)
+        foreach (var node in _nodes.Values.OfType<IntegerNode>())
+        {
+            if (node.RegisterAddress.HasValue)
+                node.Port = port;
+        }
+        foreach (var node in _nodes.Values.OfType<FloatNode>())
+        {
+            if (node.RegisterAddress.HasValue)
+                node.Port = port;
+        }
+
         // Wire node map to command nodes
         foreach (var node in _nodes.Values.OfType<CommandNode>())
         {
@@ -125,6 +137,23 @@ public class NodeMap : INodeMap
                         category.AddFeature(child);
                     }
                 }
+            }
+
+            // Resolve pValue references for value nodes
+            if (node is IntegerNode intNode && intNode.PValueNodeName is not null)
+            {
+                if (_nodes.TryGetValue(intNode.PValueNodeName, out var target))
+                    intNode.PValueNode = target;
+            }
+            else if (node is FloatNode floatNode && floatNode.PValueNodeName is not null)
+            {
+                if (_nodes.TryGetValue(floatNode.PValueNodeName, out var target))
+                    floatNode.PValueNode = target;
+            }
+            else if (node is EnumerationNode enumNode && enumNode.PValueNodeName is not null)
+            {
+                if (_nodes.TryGetValue(enumNode.PValueNodeName, out var target))
+                    enumNode.PValueNode = target;
             }
         }
     }
