@@ -111,6 +111,11 @@ public class NodeMap : INodeMap
     {
         foreach (var node in _nodes.Values)
         {
+            if (node is IntegerNode intNode)
+                intNode.InvalidateCache();
+            else if (node is FloatNode floatNode)
+                floatNode.InvalidateCache();
+
             node.InvalidateNode();
         }
     }

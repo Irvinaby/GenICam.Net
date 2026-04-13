@@ -9,6 +9,7 @@ namespace GenICam.Net.GenApi;
 public class FloatNode : ValueNode, IFloat
 {
     private double _value;
+    private bool _registerCacheDirty = true;
 
     public double Value
     {
@@ -19,7 +20,14 @@ public class FloatNode : ValueNode, IFloat
             if (PValueNode is IInteger iLinked)
                 return iLinked.Value;
             if (Port is not null && RegisterAddress.HasValue)
-                return ReadFromRegister();
+            {
+                if (_registerCacheDirty)
+                {
+                    _value = ReadFromRegister();
+                    _registerCacheDirty = false;
+                }
+                return _value;
+            }
             return _value;
         }
         set
@@ -56,6 +64,9 @@ public class FloatNode : ValueNode, IFloat
         get => (long)Value;
         set => Value = value;
     }
+
+    /// <summary>Marks the cached register value as stale so the next read fetches from the device.</summary>
+    internal void InvalidateCache() => _registerCacheDirty = true;
 
     /// <summary>Expression formula (if this node is a SwissKnife).</summary>
     internal string? Formula { get; set; }
@@ -126,5 +137,6 @@ public class FloatNode : ValueNode, IFloat
         }
         Port!.Write(RegisterAddress!.Value, data);
         _value = value;
+        _registerCacheDirty = false;
     }
 }

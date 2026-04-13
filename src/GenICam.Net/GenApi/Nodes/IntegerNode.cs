@@ -9,6 +9,7 @@ namespace GenICam.Net.GenApi;
 public class IntegerNode : ValueNode, IInteger
 {
     private long _value;
+    private bool _registerCacheDirty = true;
 
     public long Value
     {
@@ -17,7 +18,14 @@ public class IntegerNode : ValueNode, IInteger
             if (PValueNode is IInteger linked)
                 return linked.Value;
             if (Port is not null && RegisterAddress.HasValue)
-                return ReadFromRegister();
+            {
+                if (_registerCacheDirty)
+                {
+                    _value = ReadFromRegister();
+                    _registerCacheDirty = false;
+                }
+                return _value;
+            }
             return _value;
         }
         set
@@ -49,6 +57,9 @@ public class IntegerNode : ValueNode, IInteger
     public long Increment { get; internal set; } = 1;
     public Representation Representation { get; internal set; } = Representation.PureNumber;
     public string Unit { get; internal set; } = string.Empty;
+
+    /// <summary>Marks the cached register value as stale so the next read fetches from the device.</summary>
+    internal void InvalidateCache() => _registerCacheDirty = true;
 
     /// <summary>Expression formula (if this node is a SwissKnife/IntSwissKnife).</summary>
     internal string? Formula { get; set; }
@@ -130,5 +141,6 @@ public class IntegerNode : ValueNode, IInteger
         }
         Port!.Write(RegisterAddress!.Value, data);
         _value = value;
+        _registerCacheDirty = false;
     }
 }

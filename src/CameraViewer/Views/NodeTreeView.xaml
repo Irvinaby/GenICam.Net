@@ -59,7 +59,10 @@
         <!-- Tree -->
         <TreeView Grid.Row="2"
                   ItemsSource="{Binding Categories}"
-                  BorderThickness="1,0,1,1">
+                  BorderThickness="1,0,1,1"
+                  VirtualizingPanel.IsVirtualizing="True"
+                  VirtualizingPanel.VirtualizationMode="Recycling"
+                  VirtualizingPanel.IsVirtualizingWhenGrouping="True">
             <TreeView.Resources>
 
                 <!-- Category template (expandable) -->

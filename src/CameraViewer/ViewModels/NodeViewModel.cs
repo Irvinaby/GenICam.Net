@@ -13,12 +13,28 @@ public sealed partial class NodeViewModel : ObservableObject
 {
     private readonly INode _node;
 
-    public NodeViewModel(INode node)
+    public NodeViewModel(INode node) : this(node, null) { }
+
+    private NodeViewModel(INode node, HashSet<string>? visited)
     {
         _node = node;
-        Children = node is ICategory cat
-            ? new ObservableCollection<NodeViewModel>(cat.Features.Select(f => new NodeViewModel(f)))
-            : [];
+
+        if (node is ICategory cat)
+        {
+            visited ??= new HashSet<string>(StringComparer.Ordinal);
+            if (!visited.Add(node.Name))
+            {
+                // Circular reference detected — stop recursion
+                Children = [];
+                return;
+            }
+            Children = new ObservableCollection<NodeViewModel>(
+                cat.Features.Select(f => new NodeViewModel(f, visited)));
+        }
+        else
+        {
+            Children = [];
+        }
     }
 
     public string Name => _node.Name;
@@ -41,8 +57,8 @@ public sealed partial class NodeViewModel : ObservableObject
     // Integer
     public long IntegerValue
     {
-        get => _node is IInteger i ? i.Value : 0;
-        set { if (_node is IInteger i && i.Value != value) { i.Value = value; OnPropertyChanged(); } }
+        get { try { return _node is IInteger i ? i.Value : 0; } catch { return 0; } }
+        set { if (_node is IInteger i && i.Value != value) { try { i.Value = value; } catch { } OnPropertyChanged(); } }
     }
     public long IntegerMin => _node is IInteger i ? i.Min : 0;
     public long IntegerMax => _node is IInteger i ? i.Max : 0;
@@ -51,8 +67,8 @@ public sealed partial class NodeViewModel : ObservableObject
     // Float
     public double FloatValue
     {
-        get => _node is IFloat f ? f.Value : 0.0;
-        set { if (_node is IFloat f && Math.Abs(f.Value - value) > double.Epsilon) { f.Value = value; OnPropertyChanged(); } }
+        get { try { return _node is IFloat f ? f.Value : 0.0; } catch { return 0.0; } }
+        set { if (_node is IFloat f) { try { f.Value = value; } catch { } OnPropertyChanged(); } }
     }
     public double FloatMin => _node is IFloat f ? f.Min : 0.0;
     public double FloatMax => _node is IFloat f ? f.Max : 0.0;
@@ -61,39 +77,52 @@ public sealed partial class NodeViewModel : ObservableObject
     // Boolean
     public bool BoolValue
     {
-        get => _node is IBoolean b && b.Value;
-        set { if (_node is IBoolean b) { b.Value = value; OnPropertyChanged(); } }
+        get { try { return _node is IBoolean b && b.Value; } catch { return false; } }
+        set { if (_node is IBoolean b) { try { b.Value = value; } catch { } OnPropertyChanged(); } }
     }
 
     // String
     public string StringValue
     {
-        get => _node is IString s ? s.Value : string.Empty;
-        set { if (_node is IString s && s.Value != value) { s.Value = value; OnPropertyChanged(); } }
+        get { try { return _node is IString s ? s.Value : string.Empty; } catch { return string.Empty; } }
+        set { if (_node is IString s && s.Value != value) { try { s.Value = value; } catch { } OnPropertyChanged(); } }
     }
 
     // Enumeration
     public string EnumValue
     {
-        get => _node is IEnumeration e ? e.Value : string.Empty;
-        set { if (_node is IEnumeration e && e.Value != value) { e.Value = value; OnPropertyChanged(); } }
+        get { try { return _node is IEnumeration e ? e.Value : string.Empty; } catch { return string.Empty; } }
+        set { if (_node is IEnumeration e && e.Value != value) { try { e.Value = value; } catch { } OnPropertyChanged(); } }
     }
     public IReadOnlyList<string> EnumEntries => _node is IEnumeration e
         ? e.Entries.Select(en => en.Symbolic).ToList()
         : [];
 
     // Display value for read-only presentation
-    public string DisplayValue => _node switch
+    public string DisplayValue
     {
-        IInteger i => $"{i.Value}{(string.IsNullOrEmpty(i.Unit) ? "" : " " + i.Unit)}",
-        IFloat f   => $"{f.Value:G6}{(string.IsNullOrEmpty(f.Unit) ? "" : " " + f.Unit)}",
-        IBoolean b => b.Value ? "true" : "false",
-        IString s  => s.Value,
-        IEnumeration e => e.Value,
-        ICommand   => "(command)",
-        ICategory  => string.Empty,
-        _          => string.Empty,
-    };
+        get
+        {
+            try
+            {
+                return _node switch
+                {
+                    IInteger i => $"{i.Value}{(string.IsNullOrEmpty(i.Unit) ? "" : " " + i.Unit)}",
+                    IFloat f   => $"{f.Value:G6}{(string.IsNullOrEmpty(f.Unit) ? "" : " " + f.Unit)}",
+                    IBoolean b => b.Value ? "true" : "false",
+                    IString s  => s.Value,
+                    IEnumeration e => e.Value,
+                    ICommand   => "(command)",
+                    ICategory  => string.Empty,
+                    _          => string.Empty,
+                };
+            }
+            catch
+            {
+                return "(error)";
+            }
+        }
+    }
 
     // Children (for categories)
     public ObservableCollection<NodeViewModel> Children { get; }
