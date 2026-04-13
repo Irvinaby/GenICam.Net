@@ -104,21 +104,6 @@
         </Style.Triggers>
     </Style>
 
-    <Style TargetType="ComboBoxItem">
-        <Setter Property="Background"  Value="{StaticResource SurfaceBrush}"/>
-        <Setter Property="Foreground"  Value="{StaticResource ForegroundBrush}"/>
-        <Setter Property="Padding"     Value="6,4"/>
-        <Style.Triggers>
-            <Trigger Property="IsHighlighted" Value="True">
-                <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
-                <Setter Property="Foreground" Value="#1E1E2E"/>
-            </Trigger>
-            <Trigger Property="IsMouseOver" Value="True">
-                <Setter Property="Background" Value="{StaticResource SurfaceOverBrush}"/>
-            </Trigger>
-        </Style.Triggers>
-    </Style>
-
     <!-- ── ListBox / ListBoxItem ─────────────────────────────────────── -->
     <Style TargetType="ListBox">
         <Setter Property="Background"      Value="{StaticResource SurfaceBrush}"/>
