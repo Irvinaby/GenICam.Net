@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using GenICam.Net.GigEVision.Gvcp;
+using Microsoft.Extensions.Logging;
 
 namespace CameraViewer.ViewModels;
 
@@ -11,6 +12,8 @@ namespace CameraViewer.ViewModels;
 /// </summary>
 public sealed partial class CameraViewModel : ObservableObject
 {
+    private readonly ILogger<CameraViewModel> _logger;
+
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ConnectCommand))]
     private GigECameraInfo? _selectedCamera;
@@ -25,6 +28,11 @@ public sealed partial class CameraViewModel : ObservableObject
 
     public event EventHandler<GigECameraInfo>? CameraConnectRequested;
 
+    public CameraViewModel(ILogger<CameraViewModel> logger)
+    {
+        _logger = logger;
+    }
+
     [RelayCommand]
     private async Task DiscoverAsync()
     {
@@ -32,6 +40,7 @@ public sealed partial class CameraViewModel : ObservableObject
         StatusMessage = "Discovering cameras…";
         Cameras.Clear();
         SelectedCamera = null;
+        _logger.LogInformation("Starting camera discovery");
 
         try
         {
@@ -40,14 +49,20 @@ public sealed partial class CameraViewModel : ObservableObject
             var cameras = await discovery.DiscoverAsync(timeoutMs: 2000);
 
             foreach (var cam in cameras)
+            {
+                _logger.LogInformation("Discovered camera: {Vendor} {Model} at {IpAddress}", cam.ManufacturerName, cam.ModelName, cam.IpAddress);
                 Cameras.Add(cam);
+            }
 
             StatusMessage = cameras.Count == 0
                 ? "No cameras found. Check network and try again."
                 : $"Found {cameras.Count} camera(s).";
+
+            _logger.LogInformation("Discovery complete: {Count} camera(s) found", cameras.Count);
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Camera discovery failed");
             StatusMessage = $"Discovery failed: {ex.Message}";
         }
         finally
@@ -60,7 +75,10 @@ public sealed partial class CameraViewModel : ObservableObject
     private void Connect()
     {
         if (SelectedCamera is not null)
+        {
+            _logger.LogInformation("Connect requested for camera at {IpAddress}", SelectedCamera.IpAddress);
             CameraConnectRequested?.Invoke(this, SelectedCamera);
+        }
     }
 
     private bool CanConnect() => SelectedCamera is not null;

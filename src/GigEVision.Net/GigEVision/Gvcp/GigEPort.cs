@@ -1,5 +1,7 @@
 using System.Buffers.Binary;
 using GenICam.Net.GenApi;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace GenICam.Net.GigEVision.Gvcp;
 
@@ -20,14 +22,17 @@ namespace GenICam.Net.GigEVision.Gvcp;
 public class GigEPort : IPort
 {
     private readonly GvcpClient _client;
+    private readonly ILogger<GigEPort> _logger;
 
     /// <summary>
     /// Creates a new GigE Vision port backed by the given GVCP client.
     /// </summary>
     /// <param name="client">The GVCP client to use for register access.</param>
-    public GigEPort(GvcpClient client)
+    /// <param name="logger">Optional logger instance.</param>
+    public GigEPort(GvcpClient client, ILogger<GigEPort>? logger = null)
     {
         _client = client;
+        _logger = logger ?? NullLogger<GigEPort>.Instance;
     }
 
     /// <inheritdoc/>
@@ -36,6 +41,7 @@ public class GigEPort : IPort
         if (length <= 0)
             return [];
 
+        _logger.LogDebug("Port.Read 0x{Address:X8}, length={Length}", address, length);
         var result = new byte[length];
         var offset = 0;
         var remaining = (int)length;
@@ -58,6 +64,7 @@ public class GigEPort : IPort
         if (data.Length == 0)
             return;
 
+        _logger.LogDebug("Port.Write 0x{Address:X8}, {Length} bytes", address, data.Length);
         var offset = 0;
         var remaining = data.Length;
 

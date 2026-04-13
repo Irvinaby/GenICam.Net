@@ -1,4 +1,6 @@
 using System.Net;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace GenICam.Net.GigEVision.Gvcp;
 
@@ -17,16 +19,19 @@ namespace GenICam.Net.GigEVision.Gvcp;
 public class GigEDiscovery : IDisposable
 {
     private readonly IUdpTransport _transport;
+    private readonly ILogger<GigEDiscovery> _logger;
     private ushort _requestId;
 
     /// <summary>
     /// Creates a new discovery instance using the given UDP transport.
     /// </summary>
     /// <param name="transport">UDP transport (must support broadcast).</param>
-    public GigEDiscovery(IUdpTransport transport)
+    /// <param name="logger">Optional logger instance.</param>
+    public GigEDiscovery(IUdpTransport transport, ILogger<GigEDiscovery>? logger = null)
     {
         _transport = transport;
         _transport.EnableBroadcast();
+        _logger = logger ?? NullLogger<GigEDiscovery>.Instance;
     }
 
     /// <summary>
@@ -39,6 +44,7 @@ public class GigEDiscovery : IDisposable
         int timeoutMs = GvcpConstants.DefaultTimeoutMs,
         CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("Broadcasting discovery command (timeout={TimeoutMs}ms)", timeoutMs);
         var reqId = ++_requestId;
         var packet = GvcpPackets.BuildDiscoveryCmd(reqId);
         var broadcastEp = new IPEndPoint(IPAddress.Broadcast, GvcpConstants.Port);
@@ -57,15 +63,22 @@ public class GigEDiscovery : IDisposable
                 var result = await _transport.ReceiveAsync(cts.Token);
 
                 if (result.Buffer.Length < GvcpConstants.AckHeaderSize)
+                {
+                    _logger.LogDebug("Discovery: ignoring short packet ({Length} bytes)", result.Buffer.Length);
                     continue;
+                }
 
                 var ackHeader = GvcpAckHeader.FromBytes(result.Buffer);
                 if (ackHeader.Acknowledge != GvcpCommandType.DiscoveryAck)
                     continue;
                 if (ackHeader.Status != GvcpStatus.Success)
+                {
+                    _logger.LogWarning("Discovery ACK with non-success status: {Status}", ackHeader.Status);
                     continue;
+                }
 
                 var info = GvcpPackets.ParseDiscoveryAck(result.Buffer);
+                _logger.LogInformation("Discovered camera: {Vendor} {Model} at {IpAddress}", info.ManufacturerName, info.ModelName, info.IpAddress);
                 cameras.Add(info);
             }
         }
@@ -74,6 +87,7 @@ public class GigEDiscovery : IDisposable
             // Timeout reached — return what we have
         }
 
+        _logger.LogInformation("Discovery complete: {Count} camera(s) found", cameras.Count);
         return cameras.AsReadOnly();
     }
 

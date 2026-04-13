@@ -59,8 +59,7 @@
         <!-- Tree -->
         <TreeView Grid.Row="2"
                   ItemsSource="{Binding Categories}"
-                  BorderThickness="1,0,1,1"
-                  CornerRadius="0,0,4,4">
+                  BorderThickness="1,0,1,1">
             <TreeView.Resources>
 
                 <!-- Category template (expandable) -->

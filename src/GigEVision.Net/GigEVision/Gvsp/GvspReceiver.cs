@@ -1,4 +1,6 @@
 using GenICam.Net.GigEVision.Gvcp;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace GenICam.Net.GigEVision.Gvsp;
 
@@ -18,6 +20,7 @@ namespace GenICam.Net.GigEVision.Gvsp;
 public class GvspReceiver : IDisposable
 {
     private readonly IUdpTransport _transport;
+    private readonly ILogger<GvspReceiver> _logger;
     private readonly Dictionary<ushort, FrameAssembly> _pendingFrames = new();
 
     /// <summary>Raised when a complete frame has been reassembled.</summary>
@@ -27,9 +30,11 @@ public class GvspReceiver : IDisposable
     /// Creates a new GVSP receiver.
     /// </summary>
     /// <param name="transport">UDP transport for receiving stream packets.</param>
-    public GvspReceiver(IUdpTransport transport)
+    /// <param name="logger">Optional logger instance.</param>
+    public GvspReceiver(IUdpTransport transport, ILogger<GvspReceiver>? logger = null)
     {
         _transport = transport;
+        _logger = logger ?? NullLogger<GvspReceiver>.Instance;
     }
 
     /// <summary>
@@ -38,6 +43,7 @@ public class GvspReceiver : IDisposable
     /// <param name="cancellationToken">Token to stop receiving.</param>
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("GVSP receive loop started");
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -47,7 +53,12 @@ public class GvspReceiver : IDisposable
             }
             catch (OperationCanceledException)
             {
+                _logger.LogInformation("GVSP receive loop cancelled");
                 break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error receiving GVSP packet");
             }
         }
     }
@@ -58,7 +69,10 @@ public class GvspReceiver : IDisposable
     internal void ProcessPacket(byte[] packetData)
     {
         if (packetData.Length < GvspConstants.GenericHeaderSize)
+        {
+            _logger.LogWarning("Packet too small ({Length} bytes), ignoring", packetData.Length);
             return;
+        }
 
         var header = GvspHeader.FromBytes(packetData);
 
@@ -139,6 +153,7 @@ public class GvspReceiver : IDisposable
             Data = frameData,
         };
 
+        _logger.LogDebug("Frame {FrameId} assembled: {SizeX}x{SizeY}, {DataLength} bytes", frame.FrameId, frame.SizeX, frame.SizeY, frameData.Length);
         FrameReceived?.Invoke(this, frame);
     }
 

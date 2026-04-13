@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+
 namespace GenICam.Net.GenApi;
 
 /// <summary>
@@ -18,8 +20,20 @@ public class CommandNode : NodeBase, ICommand
     {
         get
         {
-            // In a real implementation, this would read the register and compare.
-            return true;
+            if (NodeMap is null || RegisterNodeName is null)
+                return true;
+
+            var register = NodeMap.GetNode(RegisterNodeName) as IRegister;
+            if (register is null)
+                return true;
+
+            var data = register.Get(register.Length);
+            var value = register.Length switch
+            {
+                4 => BinaryPrimitives.ReadInt32BigEndian(data),
+                _ => 0L
+            };
+            return value != CommandValue;
         }
     }
 
@@ -28,6 +42,27 @@ public class CommandNode : NodeBase, ICommand
         if (AccessMode is AccessMode.NA or AccessMode.NI)
             throw new InvalidOperationException($"Command '{Name}' is not available (AccessMode={AccessMode}).");
 
-        // In a full implementation, this would write CommandValue to the target register via the port.
+        if (NodeMap is null || RegisterNodeName is null)
+            return;
+
+        var register = NodeMap.GetNode(RegisterNodeName) as IRegister;
+        if (register is null)
+            return;
+
+        var data = new byte[register.Length];
+        switch (register.Length)
+        {
+            case 4:
+                BinaryPrimitives.WriteInt32BigEndian(data, (int)CommandValue);
+                break;
+            case 8:
+                BinaryPrimitives.WriteInt64BigEndian(data, CommandValue);
+                break;
+            default:
+                data[0] = (byte)CommandValue;
+                break;
+        }
+
+        register.Set(data);
     }
 }

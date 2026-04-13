@@ -1,4 +1,6 @@
 using System.Net;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace GenICam.Net.GigEVision.Gvcp;
 
@@ -19,6 +21,7 @@ public class GvcpClient : IDisposable
 {
     private readonly IUdpTransport _transport;
     private readonly IPEndPoint _remoteEndPoint;
+    private readonly ILogger<GvcpClient> _logger;
     private readonly int _timeoutMs;
     private ushort _requestId;
 
@@ -28,11 +31,13 @@ public class GvcpClient : IDisposable
     /// <param name="transport">UDP transport implementation.</param>
     /// <param name="remoteEndPoint">Camera IP endpoint (IP:3956).</param>
     /// <param name="timeoutMs">Timeout for ACK responses in milliseconds.</param>
-    public GvcpClient(IUdpTransport transport, IPEndPoint remoteEndPoint, int timeoutMs = GvcpConstants.DefaultTimeoutMs)
+    /// <param name="logger">Optional logger instance.</param>
+    public GvcpClient(IUdpTransport transport, IPEndPoint remoteEndPoint, int timeoutMs = GvcpConstants.DefaultTimeoutMs, ILogger<GvcpClient>? logger = null)
     {
         _transport = transport;
         _remoteEndPoint = remoteEndPoint;
         _timeoutMs = timeoutMs;
+        _logger = logger ?? NullLogger<GvcpClient>.Instance;
     }
 
     /// <summary>
@@ -45,6 +50,7 @@ public class GvcpClient : IDisposable
     /// <exception cref="TimeoutException">Thrown when no ACK is received within the timeout.</exception>
     public async Task<uint> ReadRegisterAsync(uint address, CancellationToken cancellationToken = default)
     {
+        _logger.LogDebug("ReadRegister 0x{Address:X8}", address);
         var reqId = NextRequestId();
         var packet = GvcpPackets.BuildReadRegCmd(reqId, address);
 
@@ -54,6 +60,7 @@ public class GvcpClient : IDisposable
         ThrowIfError(ackHeader);
 
         var values = GvcpPackets.ParseReadRegAck(response);
+        _logger.LogDebug("ReadRegister 0x{Address:X8} => 0x{Value:X8}", address, values[0]);
         return values[0];
     }
 
@@ -67,6 +74,7 @@ public class GvcpClient : IDisposable
     /// <exception cref="TimeoutException">Thrown when no ACK is received within the timeout.</exception>
     public async Task WriteRegisterAsync(uint address, uint value, CancellationToken cancellationToken = default)
     {
+        _logger.LogDebug("WriteRegister 0x{Address:X8} = 0x{Value:X8}", address, value);
         var reqId = NextRequestId();
         var packet = GvcpPackets.BuildWriteRegCmd(reqId, (address, value));
 
@@ -74,6 +82,7 @@ public class GvcpClient : IDisposable
         var ackHeader = GvcpAckHeader.FromBytes(response);
 
         ThrowIfError(ackHeader);
+        _logger.LogDebug("WriteRegister 0x{Address:X8} succeeded", address);
     }
 
     /// <summary>
@@ -87,6 +96,7 @@ public class GvcpClient : IDisposable
     /// <exception cref="TimeoutException">Thrown when no ACK is received within the timeout.</exception>
     public async Task<byte[]> ReadMemoryAsync(uint address, int length, CancellationToken cancellationToken = default)
     {
+        _logger.LogDebug("ReadMemory 0x{Address:X8}, length={Length}", address, length);
         var reqId = NextRequestId();
         var packet = GvcpPackets.BuildReadMemCmd(reqId, address, (ushort)length);
 
@@ -96,6 +106,7 @@ public class GvcpClient : IDisposable
         ThrowIfError(ackHeader);
 
         var (_, data) = GvcpPackets.ParseReadMemAck(response);
+        _logger.LogDebug("ReadMemory 0x{Address:X8} returned {Length} bytes", address, data.Length);
         return data;
     }
 
@@ -109,6 +120,7 @@ public class GvcpClient : IDisposable
     /// <exception cref="TimeoutException">Thrown when no ACK is received within the timeout.</exception>
     public async Task WriteMemoryAsync(uint address, byte[] data, CancellationToken cancellationToken = default)
     {
+        _logger.LogDebug("WriteMemory 0x{Address:X8}, {Length} bytes", address, data.Length);
         var reqId = NextRequestId();
         var packet = GvcpPackets.BuildWriteMemCmd(reqId, address, data);
 
@@ -116,6 +128,7 @@ public class GvcpClient : IDisposable
         var ackHeader = GvcpAckHeader.FromBytes(response);
 
         ThrowIfError(ackHeader);
+        _logger.LogDebug("WriteMemory 0x{Address:X8} succeeded", address);
     }
 
     private async Task<byte[]> SendAndReceiveAsync(byte[] packet, CancellationToken cancellationToken)
@@ -132,6 +145,7 @@ public class GvcpClient : IDisposable
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            _logger.LogWarning("GVCP timeout after {TimeoutMs}ms to {EndPoint}", _timeoutMs, _remoteEndPoint);
             throw new TimeoutException($"No GVCP response received within {_timeoutMs}ms.");
         }
     }

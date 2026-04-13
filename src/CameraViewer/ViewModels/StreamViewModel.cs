@@ -6,6 +6,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using GenICam.Net.GigEVision.Gvcp;
 using GenICam.Net.GigEVision.Gvsp;
+using Microsoft.Extensions.Logging;
 
 namespace CameraViewer.ViewModels;
 
@@ -15,6 +16,7 @@ namespace CameraViewer.ViewModels;
 /// </summary>
 public sealed partial class StreamViewModel : ObservableObject, IDisposable
 {
+    private readonly ILogger<StreamViewModel> _logger;
     private GvspReceiver? _receiver;
     private CancellationTokenSource? _cts;
     private WriteableBitmap? _bitmap;
@@ -41,9 +43,10 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
         private set => SetProperty(ref _bitmap, value);
     }
 
-    public StreamViewModel(Dispatcher dispatcher)
+    public StreamViewModel(Dispatcher dispatcher, ILogger<StreamViewModel> logger)
     {
         _dispatcher = dispatcher;
+        _logger = logger;
     }
 
     /// <summary>
@@ -53,22 +56,35 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
     /// <returns>The local UDP port the receiver is bound to.</returns>
     public int StartStreaming(int streamPort = 0)
     {
-        if (IsStreaming) return 0;
+        if (IsStreaming)
+        {
+            _logger.LogWarning("StartStreaming called while already streaming");
+            return 0;
+        }
 
-        _cts = new CancellationTokenSource();
-        var udpClient = new System.Net.Sockets.UdpClient(streamPort);
-        var localPort = ((System.Net.IPEndPoint)udpClient.Client.LocalEndPoint!).Port;
-        var transport = new UdpTransportAdapter(udpClient);
+        try
+        {
+            _cts = new CancellationTokenSource();
+            var udpClient = new System.Net.Sockets.UdpClient(streamPort);
+            var localPort = ((System.Net.IPEndPoint)udpClient.Client.LocalEndPoint!).Port;
+            var transport = new UdpTransportAdapter(udpClient);
 
-        _receiver = new GvspReceiver(transport);
-        _receiver.FrameReceived += OnFrameReceived;
+            _receiver = new GvspReceiver(transport);
+            _receiver.FrameReceived += OnFrameReceived;
 
-        IsStreaming = true;
-        StatusText = "Streaming…";
+            IsStreaming = true;
+            StatusText = "Streaming…";
 
-        _ = _receiver.StartAsync(_cts.Token);
+            _logger.LogInformation("GVSP receiver started on local port {Port}", localPort);
+            _ = _receiver.StartAsync(_cts.Token);
 
-        return localPort;
+            return localPort;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to start streaming");
+            return 0;
+        }
     }
 
     [RelayCommand(CanExecute = nameof(IsNotStreaming))]
@@ -89,16 +105,25 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
     {
         var width = (int)frame.SizeX;
         var height = (int)frame.SizeY;
-        if (width <= 0 || height <= 0) return;
+        if (width <= 0 || height <= 0)
+        {
+            _logger.LogWarning("Frame {FrameId} has invalid dimensions: {Width}x{Height}", frame.FrameId, width, height);
+            return;
+        }
 
         // Determine pixel format for WriteableBitmap
         // We support Mono8 (0x01080001) and Mono16 (0x01100007); treat others as Mono8 best-effort.
         var isMono16 = frame.PixelFormat == 0x01100007;
         var expectedBytes = isMono16 ? width * height * 2 : width * height;
-        if (frame.Data.Length < expectedBytes) return;
+        if (frame.Data.Length < expectedBytes)
+        {
+            _logger.LogWarning("Frame {FrameId} data too short: {Actual} < {Expected} bytes", frame.FrameId, frame.Data.Length, expectedBytes);
+            return;
+        }
 
         if (_bitmap is null || _bitmap.PixelWidth != width || _bitmap.PixelHeight != height)
         {
+            _logger.LogInformation("Creating bitmap {Width}x{Height} (PixelFormat=0x{PixelFormat:X8})", width, height, frame.PixelFormat);
             _bitmap = new WriteableBitmap(width, height, 96, 96, PixelFormats.Gray8, null);
             Bitmap = _bitmap;
         }
@@ -138,6 +163,7 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
         if (elapsed >= 1.0)
         {
             Fps = Math.Round(_frameCount / elapsed, 1);
+            _logger.LogDebug("FPS: {Fps}, frames in window: {FrameCount}", Fps, _frameCount);
             _frameCount = 0;
             _lastFpsTime = now;
         }
@@ -149,6 +175,7 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
     public void StopStreaming()
     {
         if (!IsStreaming) return;
+        _logger.LogInformation("Stopping GVSP streaming");
         _cts?.Cancel();
         if (_receiver is not null)
         {
