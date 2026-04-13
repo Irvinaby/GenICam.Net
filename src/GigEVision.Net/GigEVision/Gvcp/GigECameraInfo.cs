@@ -56,34 +56,30 @@ public class GigECameraInfo
     {
         // Minimum discovery ACK payload is 248 bytes
         // Offsets based on the GigE Vision specification:
-        // 0-1: SpecVersionMajor/Minor
-        // 2-5: DeviceMode
-        // 10-15: MAC (at offset 10 in some implementations, or 8+2)
-        //
-        // Simplified layout for our implementation:
         // Offset 0:  SpecVersionMajor (2)
         // Offset 2:  SpecVersionMinor (2)
         // Offset 4:  DeviceMode (4)
         // Offset 8:  Reserved (2)
         // Offset 10: MAC (6)
-        // Offset 16: IP config (4)
-        // Offset 20: Reserved (12)
-        // Offset 32: CurrentIP (4)
-        // Offset 36: Reserved (12)
-        // Offset 48: CurrentSubnet (4)
-        // Offset 52: Reserved (12)
-        // Offset 64: CurrentGateway (4)
-        // Offset 68: ManufacturerName (32)
-        // Offset 100: ModelName (32)
-        // Offset 132: DeviceVersion (32)
-        // Offset 164: ManufacturerSpecificInfo (48)
-        // Offset 212: SerialNumber (16)
-        // Offset 228: UserDefinedName (16)
-        // Total: 244 minimum
+        // Offset 16: Supported IP Configuration (4)
+        // Offset 20: Current IP Configuration (4)
+        // Offset 24: Reserved (12)
+        // Offset 36: CurrentIP (4)
+        // Offset 40: Reserved (12)
+        // Offset 52: CurrentSubnet (4)
+        // Offset 56: Reserved (12)
+        // Offset 68: CurrentGateway (4)
+        // Offset 72: ManufacturerName (32)
+        // Offset 104: ModelName (32)
+        // Offset 136: DeviceVersion (32)
+        // Offset 168: ManufacturerSpecificInfo (48)
+        // Offset 216: SerialNumber (16)
+        // Offset 232: UserDefinedName (16)
+        // Total: 248 minimum
 
         var info = new GigECameraInfo();
 
-        if (payload.Length < 244)
+        if (payload.Length < 248)
             return info;
 
         return new GigECameraInfo
@@ -92,24 +88,24 @@ public class GigECameraInfo
             SpecVersionMinor = BinaryPrimitives.ReadUInt16BigEndian(payload[2..]),
             DeviceMode = BinaryPrimitives.ReadUInt32BigEndian(payload[4..]),
             MacAddress = payload.Slice(10, 6).ToArray(),
-            IpAddress = new IPAddress(BinaryPrimitives.ReadUInt32BigEndian(payload[32..])),
-            SubnetMask = new IPAddress(BinaryPrimitives.ReadUInt32BigEndian(payload[48..])),
-            Gateway = new IPAddress(BinaryPrimitives.ReadUInt32BigEndian(payload[64..])),
-            ManufacturerName = ReadFixedString(payload.Slice(68, 32)),
-            ModelName = ReadFixedString(payload.Slice(100, 32)),
-            DeviceVersion = ReadFixedString(payload.Slice(132, 32)),
-            ManufacturerSpecificInfo = ReadFixedString(payload.Slice(164, 48)),
-            SerialNumber = ReadFixedString(payload.Slice(212, 16)),
-            UserDefinedName = ReadFixedString(payload.Slice(228, 16)),
+            IpAddress = new IPAddress(payload.Slice(36, 4)),
+            SubnetMask = new IPAddress(payload.Slice(52, 4)),
+            Gateway = new IPAddress(payload.Slice(68, 4)),
+            ManufacturerName = ReadFixedString(payload.Slice(72, 32)),
+            ModelName = ReadFixedString(payload.Slice(104, 32)),
+            DeviceVersion = ReadFixedString(payload.Slice(136, 32)),
+            ManufacturerSpecificInfo = ReadFixedString(payload.Slice(168, 48)),
+            SerialNumber = ReadFixedString(payload.Slice(216, 16)),
+            UserDefinedName = ReadFixedString(payload.Slice(232, 16)),
         };
     }
 
     /// <summary>
-    /// Serialises this camera info to a discovery ACK payload (244 bytes).
+    /// Serialises this camera info to a discovery ACK payload (248 bytes).
     /// </summary>
     internal byte[] ToPayload()
     {
-        var payload = new byte[244];
+        var payload = new byte[248];
 
         BinaryPrimitives.WriteUInt16BigEndian(payload.AsSpan(0), SpecVersionMajor);
         BinaryPrimitives.WriteUInt16BigEndian(payload.AsSpan(2), SpecVersionMinor);
@@ -117,18 +113,18 @@ public class GigECameraInfo
         MacAddress.AsSpan(0, Math.Min(6, MacAddress.Length)).CopyTo(payload.AsSpan(10));
 
         if (IpAddress != IPAddress.None)
-            WriteIpAddress(payload.AsSpan(32), IpAddress);
+            WriteIpAddress(payload.AsSpan(36), IpAddress);
         if (SubnetMask != IPAddress.None)
-            WriteIpAddress(payload.AsSpan(48), SubnetMask);
+            WriteIpAddress(payload.AsSpan(52), SubnetMask);
         if (Gateway != IPAddress.None)
-            WriteIpAddress(payload.AsSpan(64), Gateway);
+            WriteIpAddress(payload.AsSpan(68), Gateway);
 
-        WriteFixedString(payload.AsSpan(68, 32), ManufacturerName);
-        WriteFixedString(payload.AsSpan(100, 32), ModelName);
-        WriteFixedString(payload.AsSpan(132, 32), DeviceVersion);
-        WriteFixedString(payload.AsSpan(164, 48), ManufacturerSpecificInfo);
-        WriteFixedString(payload.AsSpan(212, 16), SerialNumber);
-        WriteFixedString(payload.AsSpan(228, 16), UserDefinedName);
+        WriteFixedString(payload.AsSpan(72, 32), ManufacturerName);
+        WriteFixedString(payload.AsSpan(104, 32), ModelName);
+        WriteFixedString(payload.AsSpan(136, 32), DeviceVersion);
+        WriteFixedString(payload.AsSpan(168, 48), ManufacturerSpecificInfo);
+        WriteFixedString(payload.AsSpan(216, 16), SerialNumber);
+        WriteFixedString(payload.AsSpan(232, 16), UserDefinedName);
 
         return payload;
     }
@@ -149,11 +145,7 @@ public class GigECameraInfo
     private static void WriteIpAddress(Span<byte> dest, IPAddress address)
     {
         var bytes = address.GetAddressBytes();
-        // Store as big-endian uint32
         if (bytes.Length == 4)
-        {
-            var val = BinaryPrimitives.ReadUInt32BigEndian(bytes);
-            BinaryPrimitives.WriteUInt32BigEndian(dest, val);
-        }
+            bytes.CopyTo(dest);
     }
 }

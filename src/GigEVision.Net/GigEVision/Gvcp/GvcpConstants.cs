@@ -25,4 +25,16 @@ public static class GvcpConstants
 
     /// <summary>Broadcast address for device discovery.</summary>
     public const string BroadcastAddress = "255.255.255.255";
+
+    /// <summary>Control Channel Privilege register (exclusive access). Write 2 to take control.</summary>
+    public const uint CcpRegister = 0x0A00;
+
+    /// <summary>Stream Channel Port 0 register. Bits [31:16] = host port, bit 0 = channel enable.</summary>
+    public const uint Scp0Register = 0x0D00;
+
+    /// <summary>Stream Channel Packet Size 0 register.</summary>
+    public const uint Scps0Register = 0x0D04;
+
+    /// <summary>Stream Channel Destination Address 0 register (host IP as big-endian uint32).</summary>
+    public const uint Scda0Register = 0x0D18;
 }

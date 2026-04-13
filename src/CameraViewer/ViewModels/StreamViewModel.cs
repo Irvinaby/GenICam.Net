@@ -50,13 +50,15 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
     /// Starts the GVSP receive loop on the specified UDP port.
     /// </summary>
     /// <param name="streamPort">The UDP port on which the camera sends GVSP packets (typically 0 for auto-bind).</param>
-    public void StartStreaming(int streamPort = 0)
+    /// <returns>The local UDP port the receiver is bound to.</returns>
+    public int StartStreaming(int streamPort = 0)
     {
-        if (IsStreaming) return;
+        if (IsStreaming) return 0;
 
         _cts = new CancellationTokenSource();
-        var transport = new UdpTransportAdapter(
-            new System.Net.Sockets.UdpClient(streamPort));
+        var udpClient = new System.Net.Sockets.UdpClient(streamPort);
+        var localPort = ((System.Net.IPEndPoint)udpClient.Client.LocalEndPoint!).Port;
+        var transport = new UdpTransportAdapter(udpClient);
 
         _receiver = new GvspReceiver(transport);
         _receiver.FrameReceived += OnFrameReceived;
@@ -65,6 +67,8 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
         StatusText = "Streaming…";
 
         _ = _receiver.StartAsync(_cts.Token);
+
+        return localPort;
     }
 
     [RelayCommand(CanExecute = nameof(IsNotStreaming))]
