@@ -46,7 +46,7 @@ public sealed partial class CameraViewModel : ObservableObject
         {
             using var transport = new UdpTransportAdapter();
             using var discovery = new GigEDiscovery(transport);
-            var cameras = await discovery.DiscoverAsync(timeoutMs: 2000);
+            var cameras = await discovery.DiscoverAsync(timeoutMs: 3000);
 
             foreach (var cam in cameras)
             {

@@ -91,7 +91,7 @@ public class GigEDiscoveryTests
         var transport = new FakeUdpTransport();
 
         using var discovery = new GigEDiscovery(transport);
-        await discovery.DiscoverAsync(timeoutMs: 100);
+        await discovery.DiscoverAsync(timeoutMs: 100, broadcastCount: 1);
 
         Assert.That(transport.SentPackets, Has.Count.EqualTo(1));
         var sent = transport.SentPackets[0].Data;

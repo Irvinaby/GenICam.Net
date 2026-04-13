@@ -37,4 +37,10 @@ public static class GvcpConstants
 
     /// <summary>Stream Channel Destination Address 0 register (host IP as big-endian uint32).</summary>
     public const uint Scda0Register = 0x0D18;
+
+    /// <summary>First URL register: 512-byte null-terminated ASCII string with the device XML description location.</summary>
+    public const uint FirstUrlRegister = 0x0200;
+
+    /// <summary>Length of the First URL register in bytes.</summary>
+    public const int UrlRegisterLength = 512;
 }

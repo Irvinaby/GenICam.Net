@@ -1,7 +1,9 @@
 using System.Buffers.Binary;
+using System.IO;
+using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
-using CameraViewer.Demo;
+using System.Text;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using GenICam.Net.GenApi;
@@ -46,12 +48,20 @@ public sealed partial class MainViewModel : ObservableObject
         _logger.LogInformation("MainViewModel initialized");
     }
 
-    private void OnCameraConnectRequested(object? sender, GigECameraInfo cam)
+    private async void OnCameraConnectRequested(object? sender, GigECameraInfo cam)
     {
-        ConnectToCamera(cam);
+        try
+        {
+            await ConnectToCameraAsync(cam);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to connect to camera at {IpAddress}", cam.IpAddress);
+            ConnectionStatus = $"Connection failed: {ex.Message}";
+        }
     }
 
-    private void ConnectToCamera(GigECameraInfo cam)
+    private async Task ConnectToCameraAsync(GigECameraInfo cam)
     {
         _logger.LogInformation("Connecting to camera at {IpAddress}", cam.IpAddress);
         ConnectionStatus = $"Connecting to {cam.IpAddress}…";
@@ -67,9 +77,17 @@ public sealed partial class MainViewModel : ObservableObject
         _gvcpClient = new GvcpClient(transport, new IPEndPoint(cam.IpAddress, GvcpConstants.Port));
         _logger.LogDebug("GVCP client created for {IpAddress}:{Port}", cam.IpAddress, GvcpConstants.Port);
 
-        // For demo purposes, load the synthetic node map.
-        // In a real implementation, load from the camera's XML bootstrap register.
-        _nodeMap = DemoNodeMapFactory.Create();
+        // Try to load the camera's actual XML description from the device
+        ConnectionStatus = $"Loading camera XML from {cam.IpAddress}…";
+        _nodeMap = await LoadCameraNodeMapAsync();
+
+        if (_nodeMap is null)
+        {
+            _logger.LogError("Could not load camera XML from device; connection aborted");
+            ConnectionStatus = $"Failed to load camera XML from {cam.IpAddress}";
+            return;
+        }
+
         NodeTreeVm.Load(_nodeMap);
 
         // Connect the node map to the GigE Vision port so commands and registers reach the camera
@@ -79,17 +97,6 @@ public sealed partial class MainViewModel : ObservableObject
 
         Title = $"CameraViewer — {cam.ManufacturerName} {cam.ModelName} ({cam.IpAddress})";
         ConnectionStatus = $"Connected: {cam.ManufacturerName} {cam.ModelName}";
-        IsCameraConnected = true;
-    }
-
-    [RelayCommand]
-    private void LoadDemoCamera()
-    {
-        _logger.LogInformation("Loading demo camera (no hardware)");
-        _nodeMap = DemoNodeMapFactory.Create();
-        NodeTreeVm.Load(_nodeMap);
-        Title = $"CameraViewer — Demo Camera (no hardware)";
-        ConnectionStatus = "Connected: Demo Camera (no hardware)";
         IsCameraConnected = true;
     }
 
@@ -149,7 +156,7 @@ public sealed partial class MainViewModel : ObservableObject
         }
         else
         {
-            _logger.LogDebug("No GVCP client or camera; streaming locally only (demo mode)");
+            _logger.LogDebug("No GVCP client or camera; GVSP receiver is listening but no camera to stream from");
         }
 
         StartAcquisitionCommand.NotifyCanExecuteChanged();
@@ -193,6 +200,100 @@ public sealed partial class MainViewModel : ObservableObject
         StreamVm.StopStreaming();
         StartAcquisitionCommand.NotifyCanExecuteChanged();
         StopAcquisitionCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>
+    /// Loads the camera's GenICam XML description from the device via GVCP bootstrap registers.
+    /// </summary>
+    private async Task<NodeMap?> LoadCameraNodeMapAsync()
+    {
+        if (_gvcpClient is null) return null;
+
+        try
+        {
+            // Read the First URL register (0x0200, 512 bytes)
+            var urlBytes = await ReadLargeBlockAsync(_gvcpClient, GvcpConstants.FirstUrlRegister, GvcpConstants.UrlRegisterLength);
+            var urlString = Encoding.ASCII.GetString(urlBytes).TrimEnd('\0');
+
+            _logger.LogInformation("Camera XML URL: {Url}", urlString);
+
+            if (!urlString.StartsWith("Local:", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogWarning("Unsupported XML URL scheme: {Url}", urlString);
+                return null;
+            }
+
+            // Parse "Local:<filename>;hex_address;hex_size"
+            var parts = urlString[6..].Split(';');
+            if (parts.Length < 3)
+            {
+                _logger.LogWarning("Invalid XML URL format: {Url}", urlString);
+                return null;
+            }
+
+            var filename = parts[0];
+            var xmlAddress = ParseHex(parts[1]);
+            var xmlSize = (int)ParseHex(parts[2]);
+
+            _logger.LogInformation("Reading camera XML: file={Filename}, address=0x{Address:X}, size={Size}",
+                filename, xmlAddress, xmlSize);
+
+            // Read the XML data from the camera memory
+            var xmlData = await ReadLargeBlockAsync(_gvcpClient, xmlAddress, xmlSize);
+
+            // Decompress if the file is a ZIP archive
+            string xmlContent;
+            if (filename.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+            {
+                using var memStream = new MemoryStream(xmlData);
+                using var archive = new ZipArchive(memStream, ZipArchiveMode.Read);
+                var entry = archive.Entries.FirstOrDefault();
+                if (entry is null)
+                {
+                    _logger.LogWarning("Camera XML ZIP archive is empty");
+                    return null;
+                }
+                using var reader = new StreamReader(entry.Open());
+                xmlContent = await reader.ReadToEndAsync();
+                _logger.LogDebug("Decompressed XML from ZIP entry: {EntryName} ({Length} chars)", entry.Name, xmlContent.Length);
+            }
+            else
+            {
+                xmlContent = Encoding.UTF8.GetString(xmlData);
+            }
+
+            var nodeMap = NodeMapParser.Parse(xmlContent);
+            _logger.LogInformation("Camera XML loaded: {NodeCount} nodes parsed", nodeMap.Nodes.Count);
+            return nodeMap;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to load camera XML from device");
+            return null;
+        }
+    }
+
+    private static async Task<byte[]> ReadLargeBlockAsync(GvcpClient client, uint address, int length)
+    {
+        var result = new byte[length];
+        var offset = 0;
+
+        while (offset < length)
+        {
+            var chunkSize = Math.Min(length - offset, GvcpConstants.MaxBlockSize);
+            var chunk = await client.ReadMemoryAsync(address + (uint)offset, chunkSize);
+            chunk.CopyTo(result, offset);
+            offset += chunkSize;
+        }
+
+        return result;
+    }
+
+    private static uint ParseHex(string hex)
+    {
+        if (hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            hex = hex[2..];
+        return Convert.ToUInt32(hex, 16);
     }
 
     private static IPAddress GetLocalIpForCamera(IPAddress cameraIp)

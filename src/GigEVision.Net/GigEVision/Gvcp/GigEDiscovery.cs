@@ -36,22 +36,32 @@ public class GigEDiscovery : IDisposable
 
     /// <summary>
     /// Broadcasts a discovery command and collects all camera responses within the timeout window.
+    /// The broadcast is sent multiple times to improve reliability on busy networks.
     /// </summary>
     /// <param name="timeoutMs">How long to listen for responses in milliseconds.</param>
+    /// <param name="broadcastCount">Number of times to send the broadcast (default: 3).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>A list of discovered cameras.</returns>
     public async Task<IReadOnlyList<GigECameraInfo>> DiscoverAsync(
         int timeoutMs = GvcpConstants.DefaultTimeoutMs,
+        int broadcastCount = 3,
         CancellationToken cancellationToken = default)
     {
-        _logger.LogInformation("Broadcasting discovery command (timeout={TimeoutMs}ms)", timeoutMs);
+        _logger.LogInformation("Broadcasting discovery command {Count} time(s) (timeout={TimeoutMs}ms)", broadcastCount, timeoutMs);
         var reqId = ++_requestId;
         var packet = GvcpPackets.BuildDiscoveryCmd(reqId);
         var broadcastEp = new IPEndPoint(IPAddress.Broadcast, GvcpConstants.Port);
 
-        await _transport.SendAsync(packet, broadcastEp, cancellationToken);
+        // Send the broadcast multiple times with short delays for reliability
+        for (var i = 0; i < broadcastCount; i++)
+        {
+            await _transport.SendAsync(packet, broadcastEp, cancellationToken);
+            if (i < broadcastCount - 1)
+                await Task.Delay(100, cancellationToken);
+        }
 
         var cameras = new List<GigECameraInfo>();
+        var seen = new HashSet<string>();
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         cts.CancelAfter(timeoutMs);
@@ -78,6 +88,12 @@ public class GigEDiscovery : IDisposable
                 }
 
                 var info = GvcpPackets.ParseDiscoveryAck(result.Buffer);
+                var key = info.IpAddress.ToString();
+                if (!seen.Add(key))
+                {
+                    _logger.LogDebug("Discovery: duplicate response from {IpAddress}, skipping", info.IpAddress);
+                    continue;
+                }
                 _logger.LogInformation("Discovered camera: {Vendor} {Model} at {IpAddress}", info.ManufacturerName, info.ModelName, info.IpAddress);
                 cameras.Add(info);
             }

@@ -76,7 +76,7 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
             StatusText = "Streaming…";
 
             _logger.LogInformation("GVSP receiver started on local port {Port}", localPort);
-            _ = _receiver.StartAsync(_cts.Token);
+            _ = RunReceiveLoopAsync();
 
             return localPort;
         }
@@ -95,6 +95,22 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
 
     private bool IsNotStreaming() => !IsStreaming;
     private bool CanStop() => IsStreaming;
+
+    private async Task RunReceiveLoopAsync()
+    {
+        try
+        {
+            await _receiver!.StartAsync(_cts!.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected on stop
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "GVSP receive loop terminated with error");
+        }
+    }
 
     private void OnFrameReceived(object? sender, GvspFrame frame)
     {
