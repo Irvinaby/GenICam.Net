@@ -20,7 +20,9 @@ public sealed partial class MainViewModel : ObservableObject
 {
     private const int DefaultStreamPort = 50000;
     private const int HeartbeatTimeoutMs = 30000;
+    private const int GvcpBusyRetryCount = 5;
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan GvcpBusyRetryDelay = TimeSpan.FromMilliseconds(100);
 
     private readonly ILogger<MainViewModel> _logger;
 
@@ -141,9 +143,11 @@ public sealed partial class MainViewModel : ObservableObject
                 var localIp = GetLocalIpForCamera(_connectedCamera.IpAddress);
                 _logger.LogDebug("Local IP for camera: {LocalIp}", localIp);
 
+                StopHeartbeat();
+                await StopCameraAcquisitionForSetupAsync(_nodeMap);
                 await ConfigureHeartbeatAsync(_gvcpClient, _nodeMap);
-                StartHeartbeat(_gvcpClient);
                 ConfigureAcquisitionDefaults(_nodeMap);
+                await Task.Delay(250);
                 await ConfigureStreamAsync(_gvcpClient, _nodeMap, localIp, localPort);
 
                 // Execute AcquisitionStart command to tell the camera to begin streaming
@@ -158,6 +162,7 @@ public sealed partial class MainViewModel : ObservableObject
                     _logger.LogWarning("AcquisitionStart node not found in node map");
                 }
 
+                StartHeartbeat(_gvcpClient);
                 ConnectionStatus = $"Streaming on port {localPort}";
             }
             catch (Exception ex)
@@ -226,7 +231,8 @@ public sealed partial class MainViewModel : ObservableObject
 
         try
         {
-            return await GvcpXmlLoader.LoadNodeMapAsync(_gvcpClient, _logger);
+            var xmlSaveDirectory = Path.Combine(AppContext.BaseDirectory, "camera-xml");
+            return await GvcpXmlLoader.LoadNodeMapAsync(_gvcpClient, _logger, xmlSaveDirectory);
         }
         catch (Exception ex)
         {
@@ -265,7 +271,7 @@ public sealed partial class MainViewModel : ObservableObject
     {
         try
         {
-            await client.WriteRegisterAsync(GvcpConstants.HeartbeatTimeoutRegister, HeartbeatTimeoutMs);
+            await WriteRegisterWithBusyRetryAsync(client, GvcpConstants.HeartbeatTimeoutRegister, HeartbeatTimeoutMs);
             _logger.LogInformation("Set GVCP heartbeat timeout register to {HeartbeatTimeoutMs} ms", HeartbeatTimeoutMs);
         }
         catch (Exception ex)
@@ -333,15 +339,17 @@ public sealed partial class MainViewModel : ObservableObject
 
         _logger.LogInformation("Configuring stream: localIp={LocalIp}, port={Port}, destination=0x{Destination:X8}", localIp, localPort, ipValue);
 
-        TrySetIntegerNode(nodeMap, "GevSCPHostPort", localPort);
-        TrySetIntegerNode(nodeMap, "GevSCPSPacketSize", 1500);
+        await WriteRegisterWithBusyRetryAsync(client, GvcpConstants.Scp0Register, (uint)localPort);
+        await WriteRegisterWithBusyRetryAsync(client, GvcpConstants.Scps0Register, 1500);
+        _logger.LogDebug("Stream bootstrap registers configured: SCP0={Port}, SCPS0=1500", localPort);
+
         TrySetIntegerNode(nodeMap, "GevSCPD", 1000);
 
         if (!TrySetIntegerNode(nodeMap, "GevSCDA", ipValue))
         {
             try
             {
-                await client.WriteRegisterAsync(GvcpConstants.Scda0Register, ipValue);
+                await WriteRegisterWithBusyRetryAsync(client, GvcpConstants.Scda0Register, ipValue);
                 _logger.LogDebug("Stream destination configured: SCDA0={IpValue:X8}", ipValue);
             }
             catch (GvcpException ex) when (ex.Status == GvcpStatus.WriteProtect)
@@ -350,9 +358,60 @@ public sealed partial class MainViewModel : ObservableObject
             }
         }
 
-        await client.WriteRegisterAsync(GvcpConstants.Scp0Register, (uint)localPort);
-        await client.WriteRegisterAsync(GvcpConstants.Scps0Register, 1500);
         _logger.LogDebug("Stream channel registers configured: SCP0={Port}, SCPS0=1500", localPort);
+    }
+
+    private async Task StopCameraAcquisitionForSetupAsync(NodeMap? nodeMap)
+    {
+        if (nodeMap?.GetNode("AcquisitionStop") is not ICommand stopCommand)
+            return;
+
+        for (var attempt = 1; attempt <= GvcpBusyRetryCount + 1; attempt++)
+        {
+            try
+            {
+                stopCommand.Execute();
+                _logger.LogInformation("AcquisitionStop command executed before stream setup");
+                await Task.Delay(250);
+                return;
+            }
+            catch (GvcpException ex) when (ex.Status == GvcpStatus.Busy && attempt <= GvcpBusyRetryCount)
+            {
+                _logger.LogDebug(
+                    ex,
+                    "AcquisitionStop busy before stream setup; retrying attempt={Attempt}/{MaxAttempts}",
+                    attempt,
+                    GvcpBusyRetryCount);
+                await Task.Delay(GvcpBusyRetryDelay);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "AcquisitionStop before stream setup failed; continuing with stream setup");
+                return;
+            }
+        }
+    }
+
+    private async Task WriteRegisterWithBusyRetryAsync(GvcpClient client, uint address, uint value)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await client.WriteRegisterAsync(address, value);
+                return;
+            }
+            catch (GvcpException ex) when (ex.Status == GvcpStatus.Busy && attempt <= GvcpBusyRetryCount)
+            {
+                _logger.LogDebug(
+                    ex,
+                    "GVCP register write busy; retrying address=0x{Address:X8}, attempt={Attempt}/{MaxAttempts}",
+                    address,
+                    attempt,
+                    GvcpBusyRetryCount);
+                await Task.Delay(GvcpBusyRetryDelay);
+            }
+        }
     }
 
     private void ConfigureAcquisitionDefaults(NodeMap? nodeMap)
@@ -476,6 +535,7 @@ public sealed partial class MainViewModel : ObservableObject
     {
         var count = 0;
         var skipped = 0;
+        var unreadable = 0;
         foreach (var node in nodeMap.Nodes)
         {
             if (!IsReadable(node.AccessMode))
@@ -500,10 +560,22 @@ public sealed partial class MainViewModel : ObservableObject
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Prefetch failed for node {Name}", node.Name);
+                if (ex is GvcpException)
+                {
+                    unreadable++;
+                    _logger.LogTrace(ex, "Prefetch skipped unreadable device node {Name}", node.Name);
+                }
+                else
+                {
+                    _logger.LogDebug(ex, "Prefetch failed for node {Name}", node.Name);
+                }
             }
         }
-        _logger.LogInformation("Prefetched values for {Count} nodes; skipped {Skipped} non-readable nodes", count, skipped);
+        _logger.LogInformation(
+            "Prefetched values for {Count} nodes; skipped {Skipped} non-readable nodes and {Unreadable} device-rejected nodes",
+            count,
+            skipped,
+            unreadable);
     }
 
     private static IPAddress GetLocalIpForCamera(IPAddress cameraIp)

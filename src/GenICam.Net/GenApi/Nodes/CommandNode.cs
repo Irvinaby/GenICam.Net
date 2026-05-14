@@ -58,7 +58,10 @@ public class CommandNode : NodeBase, ICommand
         var data = reg.Get(reg.Length);
         var value = reg.Length switch
         {
+            1 => data[0],
+            2 => BinaryPrimitives.ReadInt16BigEndian(data),
             4 => BinaryPrimitives.ReadInt32BigEndian(data),
+            8 => BinaryPrimitives.ReadInt64BigEndian(data),
             _ => 0L
         };
         return value == expected;

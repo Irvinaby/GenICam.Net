@@ -195,17 +195,33 @@ public static class NodeMapParser
             node.RegisterAddress = ParseLong(address);
 
         var pAddress = element.Element(ns + "pAddress")?.Value;
-        if (pAddress != null && node.RegisterAddress is null)
-            node.RegisterAddress = 0; // Will be resolved later if needed
+        if (pAddress != null)
+            node.PAddressNodeName = pAddress;
 
         var length = element.Element(ns + "Length")?.Value;
         if (length != null)
             node.RegisterLength = ParseLong(length);
 
+        var sign = element.Element(ns + "Sign")?.Value;
+        if (sign != null && Enum.TryParse<Sign>(sign, true, out var parsedSign))
+            node.Sign = parsedSign;
+
         var endianness = element.Element(ns + "Endianess")?.Value
                       ?? element.Element(ns + "Endianness")?.Value;
         if (endianness != null && Enum.TryParse<Endianness>(endianness, true, out var end))
             node.Endianness = end;
+
+        var bit = element.Element(ns + "Bit")?.Value;
+        if (bit != null)
+            node.Bit = checked((int)ParseLong(bit));
+
+        var lsb = element.Element(ns + "LSB")?.Value;
+        if (lsb != null)
+            node.Lsb = checked((int)ParseLong(lsb));
+
+        var msb = element.Element(ns + "MSB")?.Value;
+        if (msb != null)
+            node.Msb = checked((int)ParseLong(msb));
 
         // SwissKnife formula
         var formula = element.Element(ns + "Formula")?.Value;

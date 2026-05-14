@@ -61,6 +61,43 @@ public class GvcpXmlLoaderTests
         Assert.That(((IInteger)nodeMap.GetNode("Height")!).Value, Is.EqualTo(480));
     }
 
+    [Test]
+    public async Task LoadNodeMapAsync_WhenSaveDirectoryProvided_WritesDecodedXml()
+    {
+        var transport = new FakeUdpTransport();
+        using var client = new GvcpClient(transport, new IPEndPoint(IPAddress.Loopback, GvcpConstants.Port));
+        var saveDirectory = Path.Combine(TestContext.CurrentContext.WorkDirectory, $"camera-xml-{Guid.NewGuid():N}");
+        var xml = Encoding.UTF8.GetBytes("""
+            <RegisterDescription>
+              <Integer Name="Width">
+                <Value>800</Value>
+              </Integer>
+            </RegisterDescription>
+            """);
+
+        transport.EnqueueReceive(BuildReadMemAck(1, GvcpConstants.FirstUrlRegister,
+            BuildBootstrapUrl($"Local:test-camera.xml;0x00004000;0x{xml.Length:X8}")));
+        transport.EnqueueReceive(BuildReadMemAck(2, GvcpConstants.SecondUrlRegister, BuildBootstrapUrl(string.Empty)));
+        transport.EnqueueReceive(BuildReadMemAck(3, 0x00004000, PadToReadMemoryAlignment(xml)));
+
+        var nodeMap = await GvcpXmlLoader.LoadNodeMapAsync(client, saveXmlDirectory: saveDirectory);
+
+        Assert.That(((IInteger)nodeMap.GetNode("Width")!).Value, Is.EqualTo(800));
+        var savedFile = Directory.GetFiles(saveDirectory, "test-camera-*.xml").Single();
+        Assert.That(File.ReadAllText(savedFile), Does.Contain("<Integer Name=\"Width\">"));
+    }
+
+    [Test]
+    public void SaveCameraXml_SanitizesFilenameAndWritesUtf8Xml()
+    {
+        var saveDirectory = Path.Combine(TestContext.CurrentContext.WorkDirectory, $"camera-xml-{Guid.NewGuid():N}");
+
+        var savedPath = GvcpXmlLoader.SaveCameraXml("bad:name.zip", "<RegisterDescription />", saveDirectory);
+
+        Assert.That(Path.GetFileName(savedPath), Does.StartWith("bad_name-"));
+        Assert.That(File.ReadAllText(savedPath), Is.EqualTo("<RegisterDescription />"));
+    }
+
     private static byte[] BuildBootstrapUrl(string url)
     {
         var buffer = new byte[GvcpConstants.UrlRegisterLength];

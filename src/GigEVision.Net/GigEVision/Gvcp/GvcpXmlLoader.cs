@@ -19,6 +19,7 @@ public static class GvcpXmlLoader
     public static async Task<NodeMap> LoadNodeMapAsync(
         GvcpClient client,
         ILogger? logger = null,
+        string? saveXmlDirectory = null,
         CancellationToken cancellationToken = default)
     {
         var urls = await ReadCameraXmlUrlsAsync(client, logger, cancellationToken);
@@ -28,7 +29,7 @@ public static class GvcpXmlLoader
         {
             try
             {
-                return await LoadNodeMapFromUrlAsync(client, url, logger, cancellationToken);
+                return await LoadNodeMapFromUrlAsync(client, url, logger, saveXmlDirectory, cancellationToken);
             }
             catch (Exception ex)
             {
@@ -81,19 +82,20 @@ public static class GvcpXmlLoader
         GvcpClient client,
         string url,
         ILogger? logger,
+        string? saveXmlDirectory,
         CancellationToken cancellationToken)
     {
         if (url.StartsWith("Local:", StringComparison.OrdinalIgnoreCase))
         {
             logger?.LogInformation("Trying local camera XML URL: {Url}", url);
-            return await LoadLocalNodeMapAsync(client, url, logger, cancellationToken);
+            return await LoadLocalNodeMapAsync(client, url, logger, saveXmlDirectory, cancellationToken);
         }
 
         if (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
             (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
         {
             logger?.LogInformation("Trying HTTP camera XML URL: {Url}", url);
-            return await LoadHttpNodeMapAsync(uri, logger, cancellationToken);
+            return await LoadHttpNodeMapAsync(uri, logger, saveXmlDirectory, cancellationToken);
         }
 
         throw new NotSupportedException($"Unsupported camera XML URL scheme: {url}");
@@ -103,6 +105,7 @@ public static class GvcpXmlLoader
         GvcpClient client,
         string url,
         ILogger? logger,
+        string? saveXmlDirectory,
         CancellationToken cancellationToken)
     {
         var parts = url["Local:".Length..].Split(';', StringSplitOptions.TrimEntries);
@@ -131,7 +134,7 @@ public static class GvcpXmlLoader
                 FormatBytePreview(xmlData),
                 FormatAsciiPreview(xmlData));
 
-            return ParseCameraXml(filename, xmlData, logger);
+            return ParseCameraXml(filename, xmlData, logger, saveXmlDirectory);
         }
         catch (Exception ex)
         {
@@ -141,7 +144,11 @@ public static class GvcpXmlLoader
         }
     }
 
-    private static async Task<NodeMap> LoadHttpNodeMapAsync(Uri uri, ILogger? logger, CancellationToken cancellationToken)
+    private static async Task<NodeMap> LoadHttpNodeMapAsync(
+        Uri uri,
+        ILogger? logger,
+        string? saveXmlDirectory,
+        CancellationToken cancellationToken)
     {
         var candidates = uri.Scheme == Uri.UriSchemeHttp
             ? new[] { uri, new UriBuilder(uri) { Scheme = Uri.UriSchemeHttps, Port = -1 }.Uri }
@@ -160,7 +167,7 @@ public static class GvcpXmlLoader
             {
                 logger?.LogInformation("Downloading camera XML from {Uri}", candidate);
                 var xmlData = await http.GetByteArrayAsync(candidate, cancellationToken);
-                return ParseCameraXml(Path.GetFileName(candidate.AbsolutePath), xmlData, logger);
+                return ParseCameraXml(Path.GetFileName(candidate.AbsolutePath), xmlData, logger, saveXmlDirectory);
             }
             catch (Exception ex)
             {
@@ -222,7 +229,11 @@ public static class GvcpXmlLoader
         return result;
     }
 
-    private static NodeMap ParseCameraXml(string filename, byte[] xmlData, ILogger? logger)
+    private static NodeMap ParseCameraXml(
+        string filename,
+        byte[] xmlData,
+        ILogger? logger,
+        string? saveXmlDirectory = null)
     {
         logger?.LogInformation(
             "Parsing camera XML payload: file={Filename}, bytes={Length}, looksLikeZip={LooksLikeZip}, previewHex={PreviewHex}, previewAscii={PreviewAscii}",
@@ -263,6 +274,9 @@ public static class GvcpXmlLoader
         }
 
         var trimmedXml = xmlContent.TrimStart('\uFEFF', '\0').TrimEnd('\0');
+        if (!string.IsNullOrWhiteSpace(saveXmlDirectory))
+            SaveCameraXml(filename, trimmedXml, saveXmlDirectory, logger);
+
         try
         {
             var nodeMap = NodeMapParser.Parse(trimmedXml);
@@ -279,6 +293,28 @@ public static class GvcpXmlLoader
                 FormatTextPreview(trimmedXml));
             throw;
         }
+    }
+
+    /// <summary>
+    /// Saves a decoded camera XML document to a local directory and returns the written path.
+    /// </summary>
+    public static string SaveCameraXml(
+        string sourceFilename,
+        string xmlContent,
+        string directory,
+        ILogger? logger = null)
+    {
+        Directory.CreateDirectory(directory);
+
+        var baseName = Path.GetFileNameWithoutExtension(sourceFilename);
+        if (string.IsNullOrWhiteSpace(baseName))
+            baseName = "camera";
+
+        var safeName = SanitizeFileName(baseName);
+        var path = Path.Combine(directory, $"{safeName}-{DateTime.Now:yyyyMMdd-HHmmss}.xml");
+        File.WriteAllText(path, xmlContent, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        logger?.LogInformation("Saved camera XML to {Path}", path);
+        return path;
     }
 
     private static NodeMap? TryLoadCachedNodeMap(IReadOnlyCollection<string> urls, ILogger? logger)
@@ -374,6 +410,16 @@ public static class GvcpXmlLoader
 
         foreach (var file in files)
             yield return file;
+    }
+
+    private static string SanitizeFileName(string value)
+    {
+        var invalidChars = Path.GetInvalidFileNameChars();
+        var sanitized = new string(value
+            .Select(ch => invalidChars.Contains(ch) ? '_' : ch)
+            .ToArray());
+
+        return string.IsNullOrWhiteSpace(sanitized) ? "camera" : sanitized;
     }
 
     private static string DecodeBootstrapString(byte[] bytes)

@@ -15,9 +15,11 @@ public class IntegerNode : ValueNode, IInteger
     {
         get
         {
+            if (Formula is not null && NodeMap is not null)
+                return (long)FormulaEvaluator.Evaluate(Formula, FormulaVariables, NodeMap);
             if (PValueNode is IInteger linked)
                 return linked.Value;
-            if (Port is not null && RegisterAddress.HasValue)
+            if (Port is not null && HasRegisterAddress)
             {
                 if (_registerCacheDirty)
                 {
@@ -41,7 +43,7 @@ public class IntegerNode : ValueNode, IInteger
                 OnValueChanged();
                 return;
             }
-            if (Port is not null && RegisterAddress.HasValue)
+            if (Port is not null && HasRegisterAddress)
             {
                 WriteToRegister(value);
                 OnValueChanged();
@@ -70,11 +72,29 @@ public class IntegerNode : ValueNode, IInteger
     /// <summary>Register address for IntReg nodes.</summary>
     internal long? RegisterAddress { get; set; }
 
+    /// <summary>Name of the pAddress reference node.</summary>
+    internal string? PAddressNodeName { get; set; }
+
+    /// <summary>Resolved pAddress reference node.</summary>
+    internal INode? PAddressNode { get; set; }
+
     /// <summary>Register length in bytes for IntReg nodes (default 4).</summary>
     internal long RegisterLength { get; set; } = 4;
 
+    /// <summary>Sign interpretation for integer register access.</summary>
+    internal Sign Sign { get; set; } = Sign.Signed;
+
     /// <summary>Byte order for register access.</summary>
     internal Endianness Endianness { get; set; } = Endianness.BigEndian;
+
+    /// <summary>Single bit position for MaskedIntReg nodes.</summary>
+    internal int? Bit { get; set; }
+
+    /// <summary>Least significant bit for MaskedIntReg nodes.</summary>
+    internal int? Lsb { get; set; }
+
+    /// <summary>Most significant bit for MaskedIntReg nodes.</summary>
+    internal int? Msb { get; set; }
 
     /// <summary>Port for register access.</summary>
     internal IPort? Port { get; set; }
@@ -84,6 +104,11 @@ public class IntegerNode : ValueNode, IInteger
 
     /// <summary>Resolved pValue reference node.</summary>
     internal INode? PValueNode { get; set; }
+
+    /// <summary>Node map used to resolve formula variables.</summary>
+    internal NodeMap? NodeMap { get; set; }
+
+    internal bool HasRegisterAddress => RegisterAddress.HasValue || PAddressNode is IInteger;
 
     public override string ValueAsString
     {
@@ -95,8 +120,26 @@ public class IntegerNode : ValueNode, IInteger
 
     private long ReadFromRegister()
     {
-        var data = Port!.Read(RegisterAddress!.Value, RegisterLength);
-        return RegisterLength switch
+        var data = Port!.Read(GetRegisterAddress(), RegisterLength);
+        if (Sign == Sign.Unsigned)
+        {
+            return ApplyMask(RegisterLength switch
+            {
+                1 => data[0],
+                2 => Endianness == Endianness.BigEndian
+                    ? BinaryPrimitives.ReadUInt16BigEndian(data)
+                    : BinaryPrimitives.ReadUInt16LittleEndian(data),
+                4 => Endianness == Endianness.BigEndian
+                    ? BinaryPrimitives.ReadUInt32BigEndian(data)
+                    : BinaryPrimitives.ReadUInt32LittleEndian(data),
+                8 => CheckedUInt64ToInt64(Endianness == Endianness.BigEndian
+                    ? BinaryPrimitives.ReadUInt64BigEndian(data)
+                    : BinaryPrimitives.ReadUInt64LittleEndian(data)),
+                _ => BinaryPrimitives.ReadUInt32BigEndian(data),
+            });
+        }
+
+        return ApplyMask(RegisterLength switch
         {
             1 => data[0],
             2 => Endianness == Endianness.BigEndian
@@ -109,13 +152,40 @@ public class IntegerNode : ValueNode, IInteger
                 ? BinaryPrimitives.ReadInt64BigEndian(data)
                 : BinaryPrimitives.ReadInt64LittleEndian(data),
             _ => BinaryPrimitives.ReadInt32BigEndian(data),
-        };
+        });
     }
 
     private void WriteToRegister(long value)
     {
         var data = new byte[RegisterLength];
-        switch (RegisterLength)
+        if (Sign == Sign.Unsigned)
+        {
+            switch (RegisterLength)
+            {
+                case 1:
+                    data[0] = checked((byte)value);
+                    break;
+                case 2:
+                    if (Endianness == Endianness.BigEndian)
+                        BinaryPrimitives.WriteUInt16BigEndian(data, checked((ushort)value));
+                    else
+                        BinaryPrimitives.WriteUInt16LittleEndian(data, checked((ushort)value));
+                    break;
+                case 4:
+                    if (Endianness == Endianness.BigEndian)
+                        BinaryPrimitives.WriteUInt32BigEndian(data, checked((uint)value));
+                    else
+                        BinaryPrimitives.WriteUInt32LittleEndian(data, checked((uint)value));
+                    break;
+                case 8:
+                    if (Endianness == Endianness.BigEndian)
+                        BinaryPrimitives.WriteUInt64BigEndian(data, checked((ulong)value));
+                    else
+                        BinaryPrimitives.WriteUInt64LittleEndian(data, checked((ulong)value));
+                    break;
+            }
+        }
+        else switch (RegisterLength)
         {
             case 1:
                 data[0] = (byte)value;
@@ -139,8 +209,45 @@ public class IntegerNode : ValueNode, IInteger
                     BinaryPrimitives.WriteInt64LittleEndian(data, value);
                 break;
         }
-        Port!.Write(RegisterAddress!.Value, data);
+        Port!.Write(GetRegisterAddress(), data);
         _value = value;
         _registerCacheDirty = false;
+    }
+
+    private long GetRegisterAddress()
+    {
+        if (PAddressNode is IInteger addressNode)
+            return addressNode.Value + RegisterAddress.GetValueOrDefault();
+
+        if (RegisterAddress.HasValue)
+            return RegisterAddress.Value;
+
+        throw new InvalidOperationException($"Integer node '{Name}' does not have a register address.");
+    }
+
+    private long ApplyMask(long value)
+    {
+        if (Bit.HasValue)
+            return (value >> Bit.Value) & 1;
+
+        if (Lsb.HasValue && Msb.HasValue)
+        {
+            var width = Msb.Value - Lsb.Value + 1;
+            if (width <= 0)
+                throw new InvalidOperationException($"MaskedIntReg '{Name}' has an invalid bit range.");
+
+            var mask = width >= 63 ? long.MaxValue : (1L << width) - 1;
+            return (value >> Lsb.Value) & mask;
+        }
+
+        return value;
+    }
+
+    private static long CheckedUInt64ToInt64(ulong value)
+    {
+        if (value > long.MaxValue)
+            throw new OverflowException($"Unsigned 64-bit register value {value} cannot be represented as Int64.");
+
+        return (long)value;
     }
 }

@@ -91,7 +91,7 @@ public class NodeMap : INodeMap
         // Wire port to IntegerNode/FloatNode that have register addresses (IntReg/FloatReg)
         foreach (var node in _nodes.Values.OfType<IntegerNode>())
         {
-            if (node.RegisterAddress.HasValue)
+            if (node.HasRegisterAddress)
                 node.Port = port;
         }
         foreach (var node in _nodes.Values.OfType<FloatNode>())
@@ -157,7 +157,23 @@ public class NodeMap : INodeMap
                 if (_nodes.TryGetValue(intNode.PValueNodeName, out var target))
                     intNode.PValueNode = target;
             }
-            else if (node is FloatNode floatNode && floatNode.PValueNodeName is not null)
+
+            if (node is IntegerNode intNodeWithAddress && intNodeWithAddress.PAddressNodeName is not null)
+            {
+                if (_nodes.TryGetValue(intNodeWithAddress.PAddressNodeName, out var target))
+                    intNodeWithAddress.PAddressNode = target;
+            }
+
+            if (node is IntegerNode formulaIntNode)
+            {
+                formulaIntNode.NodeMap = this;
+            }
+            else if (node is FloatNode formulaFloatNode)
+            {
+                formulaFloatNode.NodeMap = this;
+            }
+
+            if (node is FloatNode floatNode && floatNode.PValueNodeName is not null)
             {
                 if (_nodes.TryGetValue(floatNode.PValueNodeName, out var target))
                     floatNode.PValueNode = target;

@@ -15,6 +15,8 @@ public class FloatNode : ValueNode, IFloat
     {
         get
         {
+            if (Formula is not null && NodeMap is not null)
+                return FormulaEvaluator.Evaluate(Formula, FormulaVariables, NodeMap);
             if (PValueNode is IFloat linked)
                 return linked.Value;
             if (PValueNode is IInteger iLinked)
@@ -91,6 +93,9 @@ public class FloatNode : ValueNode, IFloat
 
     /// <summary>Resolved pValue reference node.</summary>
     internal INode? PValueNode { get; set; }
+
+    /// <summary>Node map used to resolve formula variables.</summary>
+    internal NodeMap? NodeMap { get; set; }
 
     public override string ValueAsString
     {
