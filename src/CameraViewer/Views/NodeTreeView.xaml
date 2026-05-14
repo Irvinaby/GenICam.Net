@@ -8,6 +8,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
@@ -59,7 +60,27 @@
             </Grid>
         </Border>
 
-        <TreeView Grid.Row="2"
+        <Border Grid.Row="2"
+                Background="{StaticResource SurfaceBrush}"
+                Padding="6,0,6,4">
+            <TextBlock Text="{Binding StatusMessage}"
+                       TextTrimming="CharacterEllipsis">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock" BasedOn="{StaticResource MutedText}">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsStatusError}" Value="True">
+                                <Setter Property="Foreground" Value="{StaticResource DangerBrush}"/>
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsStatusSuccess}" Value="True">
+                                <Setter Property="Foreground" Value="{StaticResource SuccessBrush}"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+        </Border>
+
+        <TreeView Grid.Row="3"
                   ItemsSource="{Binding Categories}"
                   BorderBrush="Transparent"
                   BorderThickness="0"

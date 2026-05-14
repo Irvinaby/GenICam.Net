@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using GenICam.Net.GenApi;
+using Microsoft.Extensions.Logging;
 
 namespace CameraViewer.ViewModels;
 
@@ -11,11 +12,31 @@ namespace CameraViewer.ViewModels;
 /// </summary>
 public sealed partial class NodeTreeViewModel : ObservableObject
 {
+    private readonly ILogger<NodeViewModel>? _nodeLogger;
+
+    public NodeTreeViewModel()
+    {
+    }
+
+    public NodeTreeViewModel(ILogger<NodeViewModel> nodeLogger)
+    {
+        _nodeLogger = nodeLogger;
+    }
+
     [ObservableProperty]
     private Visibility _visibilityFilter = Visibility.Beginner;
 
     [ObservableProperty]
     private string _filterText = string.Empty;
+
+    [ObservableProperty]
+    private string _statusMessage = "No register writes yet";
+
+    [ObservableProperty]
+    private bool _isStatusError;
+
+    [ObservableProperty]
+    private bool _isStatusSuccess;
 
     public ObservableCollection<NodeViewModel> Categories { get; } = [];
 
@@ -26,7 +47,7 @@ public sealed partial class NodeTreeViewModel : ObservableObject
 
         var categories = nodeMap.Nodes
             .OfType<ICategory>()
-            .Select(c => new NodeViewModel(c))
+            .Select(c => new NodeViewModel(c, _nodeLogger, ReportWriteStatus))
             .ToList();
 
         // If no categories, show all non-category nodes flat
@@ -34,7 +55,7 @@ public sealed partial class NodeTreeViewModel : ObservableObject
         {
             foreach (var vm in nodeMap.Nodes
                 .Where(n => n is not ICategory)
-                .Select(n => new NodeViewModel(n)))
+                .Select(n => new NodeViewModel(n, _nodeLogger, ReportWriteStatus)))
                 Categories.Add(vm);
         }
         else
@@ -65,4 +86,11 @@ public sealed partial class NodeTreeViewModel : ObservableObject
         (string.IsNullOrWhiteSpace(FilterText) ||
          node.Name.Contains(FilterText, StringComparison.OrdinalIgnoreCase) ||
          node.DisplayName.Contains(FilterText, StringComparison.OrdinalIgnoreCase));
+
+    private void ReportWriteStatus(string message, bool isError)
+    {
+        StatusMessage = message;
+        IsStatusError = isError;
+        IsStatusSuccess = !isError;
+    }
 }

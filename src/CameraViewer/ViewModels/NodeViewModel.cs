@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
+using System.Runtime.CompilerServices;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using GenICam.Net.GenApi;
+using Microsoft.Extensions.Logging;
 
 namespace CameraViewer.ViewModels;
 
@@ -12,12 +14,26 @@ namespace CameraViewer.ViewModels;
 public sealed partial class NodeViewModel : ObservableObject
 {
     private readonly INode _node;
+    private readonly ILogger<NodeViewModel>? _logger;
+    private readonly Action<string, bool>? _reportStatus;
 
     public NodeViewModel(INode node) : this(node, null) { }
 
+    public NodeViewModel(INode node, ILogger<NodeViewModel>? logger, Action<string, bool>? reportStatus)
+        : this(node, logger, reportStatus, null)
+    {
+    }
+
     private NodeViewModel(INode node, HashSet<string>? visited)
+        : this(node, null, null, visited)
+    {
+    }
+
+    private NodeViewModel(INode node, ILogger<NodeViewModel>? logger, Action<string, bool>? reportStatus, HashSet<string>? visited)
     {
         _node = node;
+        _logger = logger;
+        _reportStatus = reportStatus;
 
         if (node is ICategory cat)
         {
@@ -29,7 +45,7 @@ public sealed partial class NodeViewModel : ObservableObject
                 return;
             }
             Children = new ObservableCollection<NodeViewModel>(
-                cat.Features.Select(f => new NodeViewModel(f, new HashSet<string>(visited, StringComparer.Ordinal))));
+                cat.Features.Select(f => new NodeViewModel(f, logger, reportStatus, new HashSet<string>(visited, StringComparer.Ordinal))));
         }
         else
         {
@@ -59,7 +75,11 @@ public sealed partial class NodeViewModel : ObservableObject
     public long IntegerValue
     {
         get { try { return IsReadable && _node is IInteger i ? i.Value : 0; } catch { return 0; } }
-        set { if (_node is IInteger i) { try { if (!IsReadable || i.Value != value) i.Value = value; } catch { } OnPropertyChanged(); } }
+        set
+        {
+            if (_node is IInteger i)
+                WriteNodeValue(value, () => { if (!IsReadable || i.Value != value) i.Value = value; });
+        }
     }
     public long IntegerMin => _node is IInteger i ? i.Min : 0;
     public long IntegerMax => _node is IInteger i ? i.Max : 0;
@@ -69,7 +89,11 @@ public sealed partial class NodeViewModel : ObservableObject
     public double FloatValue
     {
         get { try { return IsReadable && _node is IFloat f ? f.Value : 0.0; } catch { return 0.0; } }
-        set { if (_node is IFloat f) { try { f.Value = value; } catch { } OnPropertyChanged(); } }
+        set
+        {
+            if (_node is IFloat f)
+                WriteNodeValue(value, () => f.Value = value);
+        }
     }
     public double FloatMin => _node is IFloat f ? f.Min : 0.0;
     public double FloatMax => _node is IFloat f ? f.Max : 0.0;
@@ -79,21 +103,33 @@ public sealed partial class NodeViewModel : ObservableObject
     public bool BoolValue
     {
         get { try { return IsReadable && _node is IBoolean b && b.Value; } catch { return false; } }
-        set { if (_node is IBoolean b) { try { b.Value = value; } catch { } OnPropertyChanged(); } }
+        set
+        {
+            if (_node is IBoolean b)
+                WriteNodeValue(value, () => b.Value = value);
+        }
     }
 
     // String
     public string StringValue
     {
         get { try { return IsReadable && _node is IString s ? s.Value : string.Empty; } catch { return string.Empty; } }
-        set { if (_node is IString s) { try { if (!IsReadable || s.Value != value) s.Value = value; } catch { } OnPropertyChanged(); } }
+        set
+        {
+            if (_node is IString s)
+                WriteNodeValue(value, () => { if (!IsReadable || s.Value != value) s.Value = value; });
+        }
     }
 
     // Enumeration
     public string EnumValue
     {
         get { try { return IsReadable && _node is IEnumeration e ? e.Value : string.Empty; } catch { return string.Empty; } }
-        set { if (_node is IEnumeration e) { try { if (!IsReadable || e.Value != value) e.Value = value; } catch { } OnPropertyChanged(); } }
+        set
+        {
+            if (_node is IEnumeration e)
+                WriteNodeValue(value, () => { if (!IsReadable || e.Value != value) e.Value = value; });
+        }
     }
     public IReadOnlyList<string> EnumEntries => _node is IEnumeration e
         ? e.Entries.Select(en => en.Symbolic).ToList()
@@ -135,6 +171,48 @@ public sealed partial class NodeViewModel : ObservableObject
     private void ExecuteCommand()
     {
         if (_node is ICommand cmd)
-            cmd.Execute();
+            WriteNodeValue("(command)", cmd.Execute, "Executed");
+    }
+
+    private void WriteNodeValue<T>(
+        T value,
+        Action write,
+        string successVerb = "Wrote",
+        [CallerMemberName] string? propertyName = null)
+    {
+        try
+        {
+            _logger?.LogDebug(
+                "Writing node {NodeName} ({DisplayName}) value {Value}",
+                Name,
+                DisplayName,
+                value);
+
+            write();
+
+            var status = $"{successVerb} {DisplayName}: {value}";
+            _logger?.LogInformation(
+                "Node write succeeded: {NodeName} ({DisplayName}) = {Value}",
+                Name,
+                DisplayName,
+                value);
+            _reportStatus?.Invoke(status, false);
+        }
+        catch (Exception ex)
+        {
+            var status = $"Failed to write {DisplayName}: {ex.Message}";
+            _logger?.LogWarning(
+                ex,
+                "Node write failed: {NodeName} ({DisplayName}) = {Value}",
+                Name,
+                DisplayName,
+                value);
+            _reportStatus?.Invoke(status, true);
+        }
+        finally
+        {
+            OnPropertyChanged(propertyName);
+            OnPropertyChanged(nameof(DisplayValue));
+        }
     }
 }

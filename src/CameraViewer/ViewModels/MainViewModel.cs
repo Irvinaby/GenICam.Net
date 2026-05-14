@@ -48,7 +48,7 @@ public sealed partial class MainViewModel : ObservableObject
     {
         _logger = loggerFactory.CreateLogger<MainViewModel>();
         CameraVm = new CameraViewModel(loggerFactory.CreateLogger<CameraViewModel>());
-        NodeTreeVm = new NodeTreeViewModel();
+        NodeTreeVm = new NodeTreeViewModel(loggerFactory.CreateLogger<NodeViewModel>());
         StreamVm = new StreamViewModel(dispatcher, loggerFactory.CreateLogger<StreamViewModel>());
         StreamVm.PropertyChanged += (_, args) =>
         {
