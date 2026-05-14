@@ -1,7 +1,6 @@
 <UserControl x:Class="CameraViewer.Views.CameraListView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:vm="clr-namespace:CameraViewer.ViewModels">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <Grid>
         <Grid.RowDefinitions>
@@ -10,11 +9,11 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- Header -->
         <Border Grid.Row="0"
-                Background="#2A2A3E"
-                BorderBrush="#44445A" BorderThickness="1,1,1,0"
-                CornerRadius="4,4,0,0" Padding="8,6">
+                Background="{StaticResource SurfaceBrush}"
+                BorderBrush="{StaticResource AccentBrush}"
+                BorderThickness="0"
+                Padding="8,6">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -26,22 +25,19 @@
                            Margin="0"/>
                 <Button Grid.Column="1"
                         Command="{Binding DiscoverCommand}"
-                        Padding="6,2"
+                        Padding="8,3"
                         FontSize="11"
                         ToolTip="Discover cameras on the network">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="🔍" Margin="0,0,4,0"/>
-                        <TextBlock Text="Discover"/>
-                    </StackPanel>
+                    Discover
                 </Button>
             </Grid>
         </Border>
 
-        <!-- Camera list -->
         <ListBox Grid.Row="1"
                  ItemsSource="{Binding Cameras}"
                  SelectedItem="{Binding SelectedCamera}"
-                 BorderThickness="1,0,1,0"
+                 BorderBrush="Transparent"
+                 BorderThickness="0"
                  ScrollViewer.HorizontalScrollBarVisibility="Disabled">
             <ListBox.ItemTemplate>
                 <DataTemplate>
@@ -62,11 +58,11 @@
             </ListBox.ItemTemplate>
         </ListBox>
 
-        <!-- Footer: status + connect button -->
         <Border Grid.Row="2"
-                Background="#2A2A3E"
-                BorderBrush="#44445A" BorderThickness="1,0,1,1"
-                CornerRadius="0,0,4,4" Padding="8,6">
+                Background="{StaticResource SurfaceBrush}"
+                BorderBrush="{StaticResource DividerBrush}"
+                BorderThickness="0"
+                Padding="8,6">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -80,19 +76,21 @@
                 <Button Grid.Column="1"
                         Command="{Binding ConnectCommand}"
                         Style="{StaticResource AccentButton}"
-                        Padding="8,3" FontSize="11">
-                    ⚡ Connect
+                        Padding="10,3"
+                        FontSize="11">
+                    Connect
                 </Button>
             </Grid>
         </Border>
 
-        <!-- Busy overlay -->
         <Border Grid.Row="0" Grid.RowSpan="3"
                 Background="#80000000"
                 Visibility="{Binding IsDiscovering, Converter={StaticResource BoolToVisibility}}">
-            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                <TextBlock Text="Discovering…" Foreground="White" FontSize="14" HorizontalAlignment="Center"/>
-            </StackPanel>
+            <TextBlock Text="Discovering..."
+                       Foreground="White"
+                       FontSize="14"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"/>
         </Border>
     </Grid>
 </UserControl>
