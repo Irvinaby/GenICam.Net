@@ -91,6 +91,8 @@ public sealed partial class MainViewModel : ObservableObject
         var transport = new UdpTransportAdapter();
         _gvcpClient = new GvcpClient(transport, new IPEndPoint(cam.IpAddress, GvcpConstants.Port));
         _logger.LogDebug("GVCP client created for {IpAddress}:{Port}", cam.IpAddress, GvcpConstants.Port);
+        await TakeControlAsync(_gvcpClient);
+        await ConfigureBootstrapHeartbeatAsync(_gvcpClient);
 
         // Try to load the camera's actual XML description from the device
         ConnectionStatus = $"Loading camera XML from {cam.IpAddress}…";
@@ -139,7 +141,6 @@ public sealed partial class MainViewModel : ObservableObject
                 var localIp = GetLocalIpForCamera(_connectedCamera.IpAddress);
                 _logger.LogDebug("Local IP for camera: {LocalIp}", localIp);
 
-                await TakeControlAsync(_gvcpClient);
                 await ConfigureHeartbeatAsync(_gvcpClient, _nodeMap);
                 StartHeartbeat(_gvcpClient);
                 ConfigureAcquisitionDefaults(_nodeMap);
@@ -225,82 +226,13 @@ public sealed partial class MainViewModel : ObservableObject
 
         try
         {
-            // Read the First URL register (0x0200, 512 bytes)
-            var urlBytes = await ReadLargeBlockAsync(_gvcpClient, GvcpConstants.FirstUrlRegister, GvcpConstants.UrlRegisterLength);
-            var urlString = Encoding.ASCII.GetString(urlBytes).TrimEnd('\0');
-
-            _logger.LogInformation("Camera XML URL: {Url}", urlString);
-
-            if (!urlString.StartsWith("Local:", StringComparison.OrdinalIgnoreCase))
-            {
-                _logger.LogWarning("Unsupported XML URL scheme: {Url}", urlString);
-                return null;
-            }
-
-            // Parse "Local:<filename>;hex_address;hex_size"
-            var parts = urlString[6..].Split(';');
-            if (parts.Length < 3)
-            {
-                _logger.LogWarning("Invalid XML URL format: {Url}", urlString);
-                return null;
-            }
-
-            var filename = parts[0];
-            var xmlAddress = ParseHex(parts[1]);
-            var xmlSize = (int)ParseHex(parts[2]);
-
-            _logger.LogInformation("Reading camera XML: file={Filename}, address=0x{Address:X}, size={Size}",
-                filename, xmlAddress, xmlSize);
-
-            // Read the XML data from the camera memory
-            var xmlData = await ReadLargeBlockAsync(_gvcpClient, xmlAddress, xmlSize);
-
-            // Decompress if the file is a ZIP archive
-            string xmlContent;
-            if (filename.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
-            {
-                using var memStream = new MemoryStream(xmlData);
-                using var archive = new ZipArchive(memStream, ZipArchiveMode.Read);
-                var entry = archive.Entries.FirstOrDefault();
-                if (entry is null)
-                {
-                    _logger.LogWarning("Camera XML ZIP archive is empty");
-                    return null;
-                }
-                using var reader = new StreamReader(entry.Open());
-                xmlContent = await reader.ReadToEndAsync();
-                _logger.LogDebug("Decompressed XML from ZIP entry: {EntryName} ({Length} chars)", entry.Name, xmlContent.Length);
-            }
-            else
-            {
-                xmlContent = Encoding.UTF8.GetString(xmlData);
-            }
-
-            var nodeMap = NodeMapParser.Parse(xmlContent);
-            _logger.LogInformation("Camera XML loaded: {NodeCount} nodes parsed", nodeMap.Nodes.Count);
-            return nodeMap;
+            return await GvcpXmlLoader.LoadNodeMapAsync(_gvcpClient, _logger);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to load camera XML from device");
             return null;
         }
-    }
-
-    private static async Task<byte[]> ReadLargeBlockAsync(GvcpClient client, uint address, int length)
-    {
-        var result = new byte[length];
-        var offset = 0;
-
-        while (offset < length)
-        {
-            var chunkSize = Math.Min(length - offset, GvcpConstants.MaxBlockSize);
-            var chunk = await client.ReadMemoryAsync(address + (uint)offset, chunkSize);
-            chunk.CopyTo(result, offset);
-            offset += chunkSize;
-        }
-
-        return result;
     }
 
     private async Task TakeControlAsync(GvcpClient client)
@@ -326,6 +258,11 @@ public sealed partial class MainViewModel : ObservableObject
             return;
         }
 
+        await ConfigureBootstrapHeartbeatAsync(client);
+    }
+
+    private async Task ConfigureBootstrapHeartbeatAsync(GvcpClient client)
+    {
         try
         {
             await client.WriteRegisterAsync(GvcpConstants.HeartbeatTimeoutRegister, HeartbeatTimeoutMs);

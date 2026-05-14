@@ -170,16 +170,7 @@ public class GigEVisionSystemTests
         if (!string.IsNullOrWhiteSpace(configuredXmlPath))
             return NodeMapParser.ParseFile(configuredXmlPath);
 
-        var xmlUrlBytes = await client.ReadMemoryAsync(XmlUrlRegisterAddress, XmlUrlRegisterLength);
-        var xmlUrl = DecodeBootstrapString(xmlUrlBytes);
-        TestContext.Out.WriteLine($"GenICam XML URL: {xmlUrl}");
-
-        var xmlLocation = ParseXmlLocation(xmlUrl);
-        TestContext.Out.WriteLine($"GenICam XML location: file={xmlLocation.FileName}, address=0x{xmlLocation.Address:X8}, length={xmlLocation.Length}");
-        var xmlBytes = await ReadMemoryInChunksAsync(client, xmlLocation.Address, xmlLocation.Length);
-        var xml = DecodeXml(xmlBytes, xmlLocation.FileName);
-
-        return NodeMapParser.Parse(xml);
+        return await GvcpXmlLoader.LoadNodeMapAsync(client);
     }
 
     private static async Task TakeControlIfAvailableAsync(GvcpClient client)

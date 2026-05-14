@@ -44,6 +44,9 @@ public static class GvcpConstants
     /// <summary>First URL register: 512-byte null-terminated ASCII string with the device XML description location.</summary>
     public const uint FirstUrlRegister = 0x0200;
 
+    /// <summary>Second URL register: optional fallback XML description location.</summary>
+    public const uint SecondUrlRegister = 0x0400;
+
     /// <summary>Length of the First URL register in bytes.</summary>
     public const int UrlRegisterLength = 512;
 }
