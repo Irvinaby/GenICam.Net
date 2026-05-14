@@ -113,7 +113,7 @@ public class GvspReceiverTests
     }
 
     [Test]
-    public void ProcessPacket_NewLeaderAfterMissingTrailer_CompletesPreviousFrame()
+    public void ProcessPacket_NewLeaderAfterMissingTrailer_DropsPreviousFrame()
     {
         var transport = new Tests.GigEVision.Gvcp.FakeUdpTransport();
         using var receiver = new GvspReceiver(transport);
@@ -126,9 +126,23 @@ public class GvspReceiverTests
 
         receiver.ProcessPacket(BuildLeaderPacket(2, 2, 1));
 
-        Assert.That(frames, Has.Count.EqualTo(1));
-        Assert.That(frames[0].FrameId, Is.EqualTo(1));
-        Assert.That(frames[0].Data, Is.EqualTo(new byte[] { 0xAA, 0xBB }));
+        Assert.That(frames, Is.Empty);
+    }
+
+    [Test]
+    public void ProcessPacket_TrailerWithShortPayload_DropsFrame()
+    {
+        var transport = new Tests.GigEVision.Gvcp.FakeUdpTransport();
+        using var receiver = new GvspReceiver(transport);
+
+        var frames = new List<GvspFrame>();
+        receiver.FrameReceived += (_, frame) => frames.Add(frame);
+
+        receiver.ProcessPacket(BuildLeaderPacket(1, 4, 2));
+        receiver.ProcessPacket(BuildPayloadPacket(1, 1, new byte[] { 0xAA, 0xBB }));
+        receiver.ProcessPacket(BuildTrailerPacket(1, 2));
+
+        Assert.That(frames, Is.Empty);
     }
 
     [Test]
@@ -157,18 +171,18 @@ public class GvspReceiverTests
 
         // Frame 1
         receiver.ProcessPacket(BuildLeaderPacket(1, 2, 1));
-        receiver.ProcessPacket(BuildPayloadPacket(1, 1, new byte[] { 0x11 }));
+        receiver.ProcessPacket(BuildPayloadPacket(1, 1, new byte[] { 0x11, 0x12 }));
         receiver.ProcessPacket(BuildTrailerPacket(1, 1));
 
         // Frame 2
         receiver.ProcessPacket(BuildLeaderPacket(2, 3, 1));
-        receiver.ProcessPacket(BuildPayloadPacket(2, 1, new byte[] { 0x22, 0x33 }));
+        receiver.ProcessPacket(BuildPayloadPacket(2, 1, new byte[] { 0x22, 0x33, 0x44 }));
         receiver.ProcessPacket(BuildTrailerPacket(2, 1));
 
         Assert.That(frames, Has.Count.EqualTo(2));
         Assert.That(frames[0].FrameId, Is.EqualTo(1));
-        Assert.That(frames[0].Data, Is.EqualTo(new byte[] { 0x11 }));
+        Assert.That(frames[0].Data, Is.EqualTo(new byte[] { 0x11, 0x12 }));
         Assert.That(frames[1].FrameId, Is.EqualTo(2));
-        Assert.That(frames[1].Data, Is.EqualTo(new byte[] { 0x22, 0x33 }));
+        Assert.That(frames[1].Data, Is.EqualTo(new byte[] { 0x22, 0x33, 0x44 }));
     }
 }

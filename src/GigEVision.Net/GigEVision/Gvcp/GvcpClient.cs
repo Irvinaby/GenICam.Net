@@ -57,7 +57,7 @@ public class GvcpClient : IDisposable
         var response = await SendAndReceiveAsync(packet, cancellationToken);
         var ackHeader = GvcpAckHeader.FromBytes(response);
 
-        ThrowIfError(ackHeader);
+        ThrowIfError(ackHeader, $"ReadRegister address=0x{address:X8}");
 
         var values = GvcpPackets.ParseReadRegAck(response);
         _logger.LogDebug("ReadRegister 0x{Address:X8} => 0x{Value:X8}", address, values[0]);
@@ -81,7 +81,7 @@ public class GvcpClient : IDisposable
         var response = await SendAndReceiveAsync(packet, cancellationToken);
         var ackHeader = GvcpAckHeader.FromBytes(response);
 
-        ThrowIfError(ackHeader);
+        ThrowIfError(ackHeader, $"WriteRegister address=0x{address:X8}, value=0x{value:X8}");
         _logger.LogDebug("WriteRegister 0x{Address:X8} succeeded", address);
     }
 
@@ -103,7 +103,7 @@ public class GvcpClient : IDisposable
         var response = await SendAndReceiveAsync(packet, cancellationToken);
         var ackHeader = GvcpAckHeader.FromBytes(response);
 
-        ThrowIfError(ackHeader);
+        ThrowIfError(ackHeader, $"ReadMemory address=0x{address:X8}, length={length}");
 
         var (_, data) = GvcpPackets.ParseReadMemAck(response);
         _logger.LogDebug("ReadMemory 0x{Address:X8} returned {Length} bytes", address, data.Length);
@@ -127,7 +127,7 @@ public class GvcpClient : IDisposable
         var response = await SendAndReceiveAsync(packet, cancellationToken);
         var ackHeader = GvcpAckHeader.FromBytes(response);
 
-        ThrowIfError(ackHeader);
+        ThrowIfError(ackHeader, $"WriteMemory address=0x{address:X8}, length={data.Length}");
         _logger.LogDebug("WriteMemory 0x{Address:X8} succeeded", address);
     }
 
@@ -152,10 +152,14 @@ public class GvcpClient : IDisposable
 
     private ushort NextRequestId() => ++_requestId;
 
-    private static void ThrowIfError(GvcpAckHeader ackHeader)
+    private static void ThrowIfError(GvcpAckHeader ackHeader, string context)
     {
         if (ackHeader.Status != GvcpStatus.Success)
-            throw new GvcpException(ackHeader.Status);
+        {
+            throw new GvcpException(
+                ackHeader.Status,
+                $"GVCP {context} failed with status: {ackHeader.Status} (0x{(ushort)ackHeader.Status:X4})");
+        }
     }
 
     /// <inheritdoc/>

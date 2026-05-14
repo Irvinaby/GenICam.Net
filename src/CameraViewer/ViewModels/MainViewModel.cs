@@ -287,7 +287,22 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 while (await timer.WaitForNextTickAsync(token))
                 {
-                    await client.ReadRegisterAsync(GvcpConstants.CcpRegister, token);
+                    try
+                    {
+                        await client.ReadRegisterAsync(GvcpConstants.CcpRegister, token);
+                    }
+                    catch (OperationCanceledException) when (token.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (TimeoutException ex)
+                    {
+                        _logger.LogDebug(ex, "GVCP heartbeat timed out; continuing");
+                    }
+                    catch (GvcpException ex)
+                    {
+                        _logger.LogDebug(ex, "GVCP heartbeat read failed; continuing");
+                    }
                 }
             }
             catch (OperationCanceledException)
@@ -320,6 +335,7 @@ public sealed partial class MainViewModel : ObservableObject
 
         TrySetIntegerNode(nodeMap, "GevSCPHostPort", localPort);
         TrySetIntegerNode(nodeMap, "GevSCPSPacketSize", 1500);
+        TrySetIntegerNode(nodeMap, "GevSCPD", 1000);
 
         if (!TrySetIntegerNode(nodeMap, "GevSCDA", ipValue))
         {
@@ -410,6 +426,8 @@ public sealed partial class MainViewModel : ObservableObject
 
     private static bool IsWritable(AccessMode accessMode) => accessMode is AccessMode.RW or AccessMode.WO;
 
+    private static bool IsReadable(AccessMode accessMode) => accessMode is AccessMode.RO or AccessMode.RW;
+
     private static string SafeReadInteger(IInteger node)
     {
         try
@@ -457,8 +475,15 @@ public sealed partial class MainViewModel : ObservableObject
     private void PrefetchNodeValues(NodeMap nodeMap)
     {
         var count = 0;
+        var skipped = 0;
         foreach (var node in nodeMap.Nodes)
         {
+            if (!IsReadable(node.AccessMode))
+            {
+                skipped++;
+                continue;
+            }
+
             try
             {
                 // Simply reading the value triggers the register read and populates the cache
@@ -478,7 +503,7 @@ public sealed partial class MainViewModel : ObservableObject
                 _logger.LogDebug(ex, "Prefetch failed for node {Name}", node.Name);
             }
         }
-        _logger.LogInformation("Prefetched values for {Count} nodes", count);
+        _logger.LogInformation("Prefetched values for {Count} nodes; skipped {Skipped} non-readable nodes", count, skipped);
     }
 
     private static IPAddress GetLocalIpForCamera(IPAddress cameraIp)

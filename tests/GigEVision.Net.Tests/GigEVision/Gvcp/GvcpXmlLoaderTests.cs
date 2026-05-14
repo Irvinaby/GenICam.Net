@@ -30,7 +30,7 @@ public class GvcpXmlLoaderTests
         transport.EnqueueReceive(BuildReadMemAck(2, GvcpConstants.SecondUrlRegister,
             BuildBootstrapUrl($"Local:fallback.xml;0x{fallbackXmlAddress:X8};0x{xml.Length:X8}")));
         transport.EnqueueReceive(new GvcpAckHeader(GvcpStatus.AccessDenied, GvcpCommandType.ReadMemAck, 0, 3).ToBytes());
-        transport.EnqueueReceive(BuildReadMemAck(4, fallbackXmlAddress, xml));
+        transport.EnqueueReceive(BuildReadMemAck(4, fallbackXmlAddress, PadToReadMemoryAlignment(xml)));
 
         var nodeMap = await GvcpXmlLoader.LoadNodeMapAsync(client);
 
@@ -70,6 +70,21 @@ public class GvcpXmlLoaderTests
 
     private static byte[] BuildReadMemAck(ushort ackId, uint address, byte[] data)
         => GvcpPackets.BuildReadMemAck(ackId, GvcpStatus.Success, address, data);
+
+    private static byte[] PadToReadMemoryAlignment(byte[] data)
+    {
+        const int alignment = 4;
+        var alignedLength = data.Length % alignment == 0
+            ? data.Length
+            : data.Length + alignment - data.Length % alignment;
+
+        if (alignedLength == data.Length)
+            return data;
+
+        var padded = new byte[alignedLength];
+        data.CopyTo(padded, 0);
+        return padded;
+    }
 
     private sealed class BrowserUserAgentXmlServer : IDisposable
     {

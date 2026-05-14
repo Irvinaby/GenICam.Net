@@ -22,6 +22,8 @@ public static class GvcpXmlLoader
         CancellationToken cancellationToken = default)
     {
         var urls = await ReadCameraXmlUrlsAsync(client, logger, cancellationToken);
+        logger?.LogInformation("Camera advertised {Count} XML URL(s): {Urls}", urls.Count, string.Join(", ", urls));
+
         foreach (var url in urls)
         {
             try
@@ -55,7 +57,7 @@ public static class GvcpXmlLoader
         {
             try
             {
-                var urlBytes = await ReadMemoryInChunksAsync(client, address, GvcpConstants.UrlRegisterLength, cancellationToken);
+                var urlBytes = await ReadMemoryInChunksAsync(client, address, GvcpConstants.UrlRegisterLength, logger, cancellationToken);
                 var url = DecodeBootstrapString(urlBytes);
                 if (string.IsNullOrWhiteSpace(url))
                 {
@@ -82,11 +84,15 @@ public static class GvcpXmlLoader
         CancellationToken cancellationToken)
     {
         if (url.StartsWith("Local:", StringComparison.OrdinalIgnoreCase))
+        {
+            logger?.LogInformation("Trying local camera XML URL: {Url}", url);
             return await LoadLocalNodeMapAsync(client, url, logger, cancellationToken);
+        }
 
         if (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
             (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
         {
+            logger?.LogInformation("Trying HTTP camera XML URL: {Url}", url);
             return await LoadHttpNodeMapAsync(uri, logger, cancellationToken);
         }
 
@@ -107,11 +113,32 @@ public static class GvcpXmlLoader
         var xmlAddress = ParseXmlUrlUInt32(parts[1]);
         var xmlSize = (int)ParseXmlUrlUInt32(parts[2]);
 
-        logger?.LogInformation("Reading local camera XML: file={Filename}, address=0x{Address:X}, size={Size}",
-            filename, xmlAddress, xmlSize);
+        logger?.LogInformation(
+            "Parsed local camera XML descriptor: file={Filename}, address=0x{Address:X8}, size={Size}, rawAddress={RawAddress}, rawSize={RawSize}",
+            filename,
+            xmlAddress,
+            xmlSize,
+            parts[1],
+            parts[2]);
 
-        var xmlData = await ReadMemoryInChunksAsync(client, xmlAddress, xmlSize, cancellationToken);
-        return ParseCameraXml(filename, xmlData, logger);
+        try
+        {
+            var xmlData = await ReadMemoryInChunksAsync(client, xmlAddress, xmlSize, logger, cancellationToken);
+            logger?.LogInformation(
+                "Read local camera XML bytes: file={Filename}, bytes={Length}, previewHex={PreviewHex}, previewAscii={PreviewAscii}",
+                filename,
+                xmlData.Length,
+                FormatBytePreview(xmlData),
+                FormatAsciiPreview(xmlData));
+
+            return ParseCameraXml(filename, xmlData, logger);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"Could not load local camera XML '{filename}' from 0x{xmlAddress:X8} ({xmlSize} bytes).",
+                ex);
+        }
     }
 
     private static async Task<NodeMap> LoadHttpNodeMapAsync(Uri uri, ILogger? logger, CancellationToken cancellationToken)
@@ -149,16 +176,46 @@ public static class GvcpXmlLoader
         GvcpClient client,
         uint address,
         int length,
+        ILogger? logger,
         CancellationToken cancellationToken)
     {
         var result = new byte[length];
         var offset = 0;
+        logger?.LogInformation("Reading camera memory: address=0x{Address:X8}, length={Length}, maxChunk={MaxChunk}",
+            address, length, GvcpConstants.MaxBlockSize);
 
         while (offset < length)
         {
-            var chunkSize = Math.Min(length - offset, GvcpConstants.MaxBlockSize);
-            var chunk = await client.ReadMemoryAsync(address + (uint)offset, chunkSize, cancellationToken);
-            chunk.CopyTo(result, offset);
+            var remaining = length - offset;
+            var chunkSize = Math.Min(remaining, GvcpConstants.MaxBlockSize);
+            var requestedSize = AlignReadMemoryCount(chunkSize);
+            var chunkAddress = address + (uint)offset;
+
+            logger?.LogDebug(
+                "Reading camera memory chunk: address=0x{Address:X8}, requested={Requested}, useful={Useful}, offset={Offset}",
+                chunkAddress,
+                requestedSize,
+                chunkSize,
+                offset);
+
+            var chunk = await client.ReadMemoryAsync(chunkAddress, requestedSize, cancellationToken);
+            if (chunk.Length != requestedSize)
+            {
+                logger?.LogWarning(
+                    "Camera memory chunk length mismatch: address=0x{Address:X8}, requested={Requested}, useful={Useful}, received={Received}, offset={Offset}, previewHex={PreviewHex}, previewAscii={PreviewAscii}",
+                    chunkAddress,
+                    requestedSize,
+                    chunkSize,
+                    chunk.Length,
+                    offset,
+                    FormatBytePreview(chunk),
+                    FormatAsciiPreview(chunk));
+
+                throw new InvalidDataException(
+                    $"Camera returned {chunk.Length} byte(s) for memory read at 0x{chunkAddress:X8}; expected {requestedSize}.");
+            }
+
+            chunk.AsSpan(0, chunkSize).CopyTo(result.AsSpan(offset));
             offset += chunkSize;
         }
 
@@ -167,28 +224,61 @@ public static class GvcpXmlLoader
 
     private static NodeMap ParseCameraXml(string filename, byte[] xmlData, ILogger? logger)
     {
+        logger?.LogInformation(
+            "Parsing camera XML payload: file={Filename}, bytes={Length}, looksLikeZip={LooksLikeZip}, previewHex={PreviewHex}, previewAscii={PreviewAscii}",
+            filename,
+            xmlData.Length,
+            LooksLikeZip(filename, xmlData),
+            FormatBytePreview(xmlData),
+            FormatAsciiPreview(xmlData));
+
         string xmlContent;
-        if (filename.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ||
-            (xmlData.Length >= 2 && xmlData[0] == 0x50 && xmlData[1] == 0x4B))
+        if (LooksLikeZip(filename, xmlData))
         {
             using var memStream = new MemoryStream(xmlData);
             using var archive = new ZipArchive(memStream, ZipArchiveMode.Read);
+            logger?.LogInformation("Opened camera XML ZIP: file={Filename}, entries={Entries}",
+                filename,
+                string.Join(", ", archive.Entries.Select(entry => $"{entry.FullName} ({entry.Length} bytes)")));
+
             var entry = archive.Entries.FirstOrDefault(item => item.Name.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
                 ?? archive.Entries.FirstOrDefault(item => item.Length > 0)
                 ?? throw new InvalidDataException("Camera XML ZIP archive is empty.");
 
             using var reader = new StreamReader(entry.Open(), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
             xmlContent = reader.ReadToEnd();
-            logger?.LogDebug("Decompressed XML from ZIP entry: {EntryName} ({Length} chars)", entry.Name, xmlContent.Length);
+            logger?.LogInformation("Decompressed XML from ZIP entry: {EntryName}, compressedBytes={CompressedLength}, xmlChars={Length}, preview={Preview}",
+                entry.FullName,
+                entry.CompressedLength,
+                xmlContent.Length,
+                FormatTextPreview(xmlContent));
         }
         else
         {
             xmlContent = Encoding.UTF8.GetString(xmlData);
+            logger?.LogInformation("Decoded camera XML as UTF-8: file={Filename}, xmlChars={Length}, preview={Preview}",
+                filename,
+                xmlContent.Length,
+                FormatTextPreview(xmlContent));
         }
 
-        var nodeMap = NodeMapParser.Parse(xmlContent.TrimStart('\uFEFF', '\0').TrimEnd('\0'));
-        logger?.LogInformation("Camera XML loaded: {NodeCount} nodes parsed", nodeMap.Nodes.Count);
-        return nodeMap;
+        var trimmedXml = xmlContent.TrimStart('\uFEFF', '\0').TrimEnd('\0');
+        try
+        {
+            var nodeMap = NodeMapParser.Parse(trimmedXml);
+            logger?.LogInformation("Camera XML loaded: {NodeCount} nodes parsed", nodeMap.Nodes.Count);
+            return nodeMap;
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(
+                ex,
+                "Camera XML parse failed: file={Filename}, xmlChars={Length}, preview={Preview}",
+                filename,
+                trimmedXml.Length,
+                FormatTextPreview(trimmedXml));
+            throw;
+        }
     }
 
     private static NodeMap? TryLoadCachedNodeMap(IReadOnlyCollection<string> urls, ILogger? logger)
@@ -293,6 +383,54 @@ public static class GvcpXmlLoader
             length = bytes.Length;
 
         return Encoding.ASCII.GetString(bytes, 0, length).Trim();
+    }
+
+    private static bool LooksLikeZip(string filename, byte[] data)
+        => filename.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ||
+           (data.Length >= 2 && data[0] == 0x50 && data[1] == 0x4B);
+
+    private static int AlignReadMemoryCount(int count)
+    {
+        const int alignment = 4;
+        return count % alignment == 0
+            ? count
+            : count + alignment - count % alignment;
+    }
+
+    private static string FormatBytePreview(byte[] data)
+    {
+        const int previewLength = 32;
+        return data.Length == 0
+            ? "<empty>"
+            : Convert.ToHexString(data.AsSpan(0, Math.Min(previewLength, data.Length)));
+    }
+
+    private static string FormatAsciiPreview(byte[] data)
+    {
+        const int previewLength = 64;
+        if (data.Length == 0)
+            return "<empty>";
+
+        var chars = data
+            .Take(previewLength)
+            .Select(value => value is >= 0x20 and <= 0x7E ? (char)value : '.')
+            .ToArray();
+
+        return new string(chars);
+    }
+
+    private static string FormatTextPreview(string text)
+    {
+        const int previewLength = 160;
+        if (string.IsNullOrEmpty(text))
+            return "<empty>";
+
+        var preview = text
+            .Replace('\r', ' ')
+            .Replace('\n', ' ')
+            .Replace('\t', ' ');
+
+        return preview.Length <= previewLength ? preview : preview[..previewLength];
     }
 
     private static uint ParseXmlUrlUInt32(string value)

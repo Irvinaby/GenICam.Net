@@ -98,7 +98,7 @@ public class GvspReceiver : IDisposable
         if (leaderPayload.Length < GvspConstants.ImageLeaderPayloadSize)
             return;
 
-        CompletePendingFrames();
+        DropPendingFrames("new leader received before trailer");
 
         var leader = GvspImageLeader.FromBytes(leaderPayload);
 
@@ -124,23 +124,23 @@ public class GvspReceiver : IDisposable
             return;
 
         _pendingFrames.Remove(header.BlockId);
-        CompleteFrame(assembly);
+        TryCompleteFrame(assembly);
     }
 
-    private void CompletePendingFrames()
+    private void DropPendingFrames(string reason)
     {
         if (_pendingFrames.Count == 0)
             return;
 
         foreach (var assembly in _pendingFrames.Values.ToList())
         {
-            CompleteFrame(assembly);
+            _logger.LogDebug("Dropping incomplete frame {FrameId}: {Reason}", assembly.BlockId, reason);
         }
 
         _pendingFrames.Clear();
     }
 
-    private void CompleteFrame(FrameAssembly assembly)
+    private void TryCompleteFrame(FrameAssembly assembly)
     {
         // Reassemble payload data in packet order
         assembly.PayloadChunks.Sort((a, b) => a.packetId.CompareTo(b.packetId));
@@ -155,6 +155,14 @@ public class GvspReceiver : IDisposable
         {
             data.CopyTo(frameData, offset);
             offset += data.Length;
+        }
+
+        var expectedLength = GetExpectedPayloadLength(assembly.Leader);
+        if (expectedLength is not null && frameData.Length < expectedLength.Value)
+        {
+            _logger.LogWarning("Dropping incomplete frame {FrameId}: payload {Actual} < {Expected} bytes",
+                assembly.BlockId, frameData.Length, expectedLength.Value);
+            return;
         }
 
         var frame = new GvspFrame
@@ -174,6 +182,29 @@ public class GvspReceiver : IDisposable
 
         _logger.LogDebug("Frame {FrameId} assembled: {SizeX}x{SizeY}, {DataLength} bytes", frame.FrameId, frame.SizeX, frame.SizeY, frameData.Length);
         FrameReceived?.Invoke(this, frame);
+    }
+
+    private static long? GetExpectedPayloadLength(GvspImageLeader leader)
+    {
+        if (leader.PayloadType != GvspPayloadType.Image)
+            return null;
+
+        var pixelCount = checked((long)leader.SizeX * leader.SizeY);
+        var imageBytes = leader.PixelFormat switch
+        {
+            0x01080001 or 0x01080008 or 0x01080009 or 0x0108000A or 0x0108000B => pixelCount,
+            0x01100003 or 0x01100005 or 0x01100007 => pixelCount * 2,
+            0x010C0004 => (pixelCount * 10 + 7) / 8,
+            0x010C0006 => (pixelCount * 12 + 7) / 8,
+            0x02180014 or 0x02180015 => pixelCount * 3,
+            0x02200016 or 0x02200017 => pixelCount * 4,
+            _ => (long?)null,
+        };
+
+        if (imageBytes is null)
+            return null;
+
+        return imageBytes.Value + ((long)leader.PaddingX * leader.SizeY) + ((long)leader.PaddingY * leader.SizeX);
     }
 
     /// <inheritdoc/>

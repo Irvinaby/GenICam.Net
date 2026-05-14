@@ -44,6 +44,7 @@ public sealed partial class NodeViewModel : ObservableObject
     public AccessMode AccessMode => _node.AccessMode;
     public bool IsReadOnly => _node.AccessMode is AccessMode.RO or AccessMode.NA or AccessMode.NI;
     public bool IsWritable => !IsReadOnly;
+    public bool IsReadable => _node.AccessMode is AccessMode.RO or AccessMode.RW;
 
     // Type discriminators
     public bool IsCategory  => _node is ICategory;
@@ -57,8 +58,8 @@ public sealed partial class NodeViewModel : ObservableObject
     // Integer
     public long IntegerValue
     {
-        get { try { return _node is IInteger i ? i.Value : 0; } catch { return 0; } }
-        set { if (_node is IInteger i && i.Value != value) { try { i.Value = value; } catch { } OnPropertyChanged(); } }
+        get { try { return IsReadable && _node is IInteger i ? i.Value : 0; } catch { return 0; } }
+        set { if (_node is IInteger i) { try { if (!IsReadable || i.Value != value) i.Value = value; } catch { } OnPropertyChanged(); } }
     }
     public long IntegerMin => _node is IInteger i ? i.Min : 0;
     public long IntegerMax => _node is IInteger i ? i.Max : 0;
@@ -67,7 +68,7 @@ public sealed partial class NodeViewModel : ObservableObject
     // Float
     public double FloatValue
     {
-        get { try { return _node is IFloat f ? f.Value : 0.0; } catch { return 0.0; } }
+        get { try { return IsReadable && _node is IFloat f ? f.Value : 0.0; } catch { return 0.0; } }
         set { if (_node is IFloat f) { try { f.Value = value; } catch { } OnPropertyChanged(); } }
     }
     public double FloatMin => _node is IFloat f ? f.Min : 0.0;
@@ -77,22 +78,22 @@ public sealed partial class NodeViewModel : ObservableObject
     // Boolean
     public bool BoolValue
     {
-        get { try { return _node is IBoolean b && b.Value; } catch { return false; } }
+        get { try { return IsReadable && _node is IBoolean b && b.Value; } catch { return false; } }
         set { if (_node is IBoolean b) { try { b.Value = value; } catch { } OnPropertyChanged(); } }
     }
 
     // String
     public string StringValue
     {
-        get { try { return _node is IString s ? s.Value : string.Empty; } catch { return string.Empty; } }
-        set { if (_node is IString s && s.Value != value) { try { s.Value = value; } catch { } OnPropertyChanged(); } }
+        get { try { return IsReadable && _node is IString s ? s.Value : string.Empty; } catch { return string.Empty; } }
+        set { if (_node is IString s) { try { if (!IsReadable || s.Value != value) s.Value = value; } catch { } OnPropertyChanged(); } }
     }
 
     // Enumeration
     public string EnumValue
     {
-        get { try { return _node is IEnumeration e ? e.Value : string.Empty; } catch { return string.Empty; } }
-        set { if (_node is IEnumeration e && e.Value != value) { try { e.Value = value; } catch { } OnPropertyChanged(); } }
+        get { try { return IsReadable && _node is IEnumeration e ? e.Value : string.Empty; } catch { return string.Empty; } }
+        set { if (_node is IEnumeration e) { try { if (!IsReadable || e.Value != value) e.Value = value; } catch { } OnPropertyChanged(); } }
     }
     public IReadOnlyList<string> EnumEntries => _node is IEnumeration e
         ? e.Entries.Select(en => en.Symbolic).ToList()
@@ -105,6 +106,9 @@ public sealed partial class NodeViewModel : ObservableObject
         {
             try
             {
+                if (!IsReadable)
+                    return _node.AccessMode == AccessMode.WO ? "<write-only>" : string.Empty;
+
                 return _node switch
                 {
                     IInteger i => $"{i.Value}{(string.IsNullOrEmpty(i.Unit) ? "" : " " + i.Unit)}",
