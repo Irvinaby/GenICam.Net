@@ -40,4 +40,7 @@ public static class GvspConstants
 
     /// <summary>Size of the GVSP image leader payload in bytes.</summary>
     public const int ImageLeaderPayloadSize = 36;
+
+    /// <summary>Size of the GVSP image trailer payload in bytes.</summary>
+    public const int ImageTrailerPayloadSize = 8;
 }

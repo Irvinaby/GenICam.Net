@@ -5,10 +5,16 @@ namespace GenICam.Net.Tests.GigEVision.Gvsp;
 [TestFixture]
 public class GvspReceiverTests
 {
-    private static byte[] BuildLeaderPacket(ushort blockId, uint sizeX, uint sizeY, uint pixelFormat = 0x01080001)
+    private static byte[] BuildLeaderPacket(
+        ushort blockId,
+        uint sizeX,
+        uint sizeY,
+        uint pixelFormat = 0x01080001,
+        ushort paddingX = 0,
+        ushort paddingY = 0)
     {
         var header = new GvspHeader(0, blockId, GvspPacketType.Leader, 0);
-        var leader = new GvspImageLeader(GvspPayloadType.Image, 0, pixelFormat, sizeX, sizeY, 0, 0, 0, 0);
+        var leader = new GvspImageLeader(GvspPayloadType.Image, 0, pixelFormat, sizeX, sizeY, 0, 0, paddingX, paddingY);
 
         var headerBytes = header.ToBytes();
         var leaderBytes = leader.ToBytes();
@@ -43,6 +49,9 @@ public class GvspReceiverTests
         trailerBytes.CopyTo(packet, headerBytes.Length);
         return packet;
     }
+
+    private static byte[] BuildMalformedTrailerPacket(ushort blockId)
+        => new GvspHeader(0, blockId, GvspPacketType.Trailer, 0).ToBytes();
 
     [Test]
     public void ProcessPacket_CompleteFrame_RaisesEvent()
@@ -98,6 +107,25 @@ public class GvspReceiverTests
     }
 
     [Test]
+    public void ProcessPacket_DuplicatePayloadPacket_IgnoresDuplicate()
+    {
+        var transport = new Tests.GigEVision.Gvcp.FakeUdpTransport();
+        using var receiver = new GvspReceiver(transport);
+
+        GvspFrame? receivedFrame = null;
+        receiver.FrameReceived += (_, frame) => receivedFrame = frame;
+
+        receiver.ProcessPacket(BuildLeaderPacket(1, 4, 1));
+        receiver.ProcessPacket(BuildPayloadPacket(1, 1, new byte[] { 0x10, 0x11 }));
+        receiver.ProcessPacket(BuildPayloadPacket(1, 1, new byte[] { 0xEE, 0xEF }));
+        receiver.ProcessPacket(BuildPayloadPacket(1, 2, new byte[] { 0x12, 0x13 }));
+        receiver.ProcessPacket(BuildTrailerPacket(1, 1));
+
+        Assert.That(receivedFrame, Is.Not.Null);
+        Assert.That(receivedFrame!.Data, Is.EqualTo(new byte[] { 0x10, 0x11, 0x12, 0x13 }));
+    }
+
+    [Test]
     public void ProcessPacket_TrailerWithoutLeader_NoEvent()
     {
         var transport = new Tests.GigEVision.Gvcp.FakeUdpTransport();
@@ -140,6 +168,55 @@ public class GvspReceiverTests
 
         receiver.ProcessPacket(BuildLeaderPacket(1, 4, 2));
         receiver.ProcessPacket(BuildPayloadPacket(1, 1, new byte[] { 0xAA, 0xBB }));
+        receiver.ProcessPacket(BuildTrailerPacket(1, 2));
+
+        Assert.That(frames, Is.Empty);
+    }
+
+    [Test]
+    public void ProcessPacket_MalformedTrailer_DoesNotCompleteFrame()
+    {
+        var transport = new Tests.GigEVision.Gvcp.FakeUdpTransport();
+        using var receiver = new GvspReceiver(transport);
+
+        var frames = new List<GvspFrame>();
+        receiver.FrameReceived += (_, frame) => frames.Add(frame);
+
+        receiver.ProcessPacket(BuildLeaderPacket(1, 2, 1));
+        receiver.ProcessPacket(BuildPayloadPacket(1, 1, new byte[] { 0xAA, 0xBB }));
+        receiver.ProcessPacket(BuildMalformedTrailerPacket(1));
+
+        Assert.That(frames, Is.Empty);
+    }
+
+    [Test]
+    public void ProcessPacket_Mono12Packed_UsesPackedPayloadLength()
+    {
+        var transport = new Tests.GigEVision.Gvcp.FakeUdpTransport();
+        using var receiver = new GvspReceiver(transport);
+
+        GvspFrame? receivedFrame = null;
+        receiver.FrameReceived += (_, frame) => receivedFrame = frame;
+
+        receiver.ProcessPacket(BuildLeaderPacket(1, 5, 1, pixelFormat: 0x010C0006));
+        receiver.ProcessPacket(BuildPayloadPacket(1, 1, new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 }));
+        receiver.ProcessPacket(BuildTrailerPacket(1, 1));
+
+        Assert.That(receivedFrame, Is.Not.Null);
+        Assert.That(receivedFrame!.Data, Has.Length.EqualTo(8));
+    }
+
+    [Test]
+    public void ProcessPacket_PaddedMono8_RequiresPaddingBytes()
+    {
+        var transport = new Tests.GigEVision.Gvcp.FakeUdpTransport();
+        using var receiver = new GvspReceiver(transport);
+
+        var frames = new List<GvspFrame>();
+        receiver.FrameReceived += (_, frame) => frames.Add(frame);
+
+        receiver.ProcessPacket(BuildLeaderPacket(1, 4, 2, paddingX: 2));
+        receiver.ProcessPacket(BuildPayloadPacket(1, 1, new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 }));
         receiver.ProcessPacket(BuildTrailerPacket(1, 2));
 
         Assert.That(frames, Is.Empty);

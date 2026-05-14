@@ -114,6 +114,9 @@ public class GvspReceiver : IDisposable
         if (!_pendingFrames.TryGetValue(header.BlockId, out var assembly))
             return;
 
+        if (assembly.PayloadChunks.Any(chunk => chunk.packetId == header.PacketId))
+            return;
+
         var payloadData = packetData.AsSpan(GvspConstants.GenericHeaderSize).ToArray();
         assembly.PayloadChunks.Add((header.PacketId, payloadData));
     }
@@ -121,6 +124,9 @@ public class GvspReceiver : IDisposable
     private void ProcessTrailer(GvspHeader header, byte[] packetData)
     {
         if (!_pendingFrames.TryGetValue(header.BlockId, out var assembly))
+            return;
+
+        if (packetData.Length < GvspConstants.GenericHeaderSize + GvspConstants.ImageTrailerPayloadSize)
             return;
 
         _pendingFrames.Remove(header.BlockId);
