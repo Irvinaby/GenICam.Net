@@ -29,6 +29,9 @@ public static class GvcpConstants
     /// <summary>Control Channel Privilege register (exclusive access). Write 2 to take control.</summary>
     public const uint CcpRegister = 0x0A00;
 
+    /// <summary>GVCP heartbeat timeout register, in milliseconds.</summary>
+    public const uint HeartbeatTimeoutRegister = 0x0938;
+
     /// <summary>Stream Channel Port 0 register. Bits [31:16] = host port, bit 0 = channel enable.</summary>
     public const uint Scp0Register = 0x0D00;
 

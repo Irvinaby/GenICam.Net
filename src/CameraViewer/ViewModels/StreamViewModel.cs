@@ -23,9 +23,12 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
     private WriteableBitmap? _bitmap;
     private readonly Dispatcher _dispatcher;
     private CountingUdpTransport? _streamTransport;
+    private GvspFrame? _pendingRenderFrame;
+    private int _renderQueued;
 
     private int _frameCount;
     private int _receivedFrameCount;
+    private int _completedFrameCount;
     private DateTime _lastFpsTime = DateTime.UtcNow;
 
     [ObservableProperty]
@@ -48,6 +51,9 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private string _packetSummary = string.Empty;
+
+    [ObservableProperty]
+    private string _imageStats = string.Empty;
 
     public WriteableBitmap? Bitmap
     {
@@ -90,8 +96,10 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
             UdpPacketCount = 0;
             ReceivedFrames = 0;
             PacketSummary = string.Empty;
+            ImageStats = string.Empty;
             _frameCount = 0;
             _receivedFrameCount = 0;
+            _completedFrameCount = 0;
             _lastFpsTime = DateTime.UtcNow;
             StatusText = "Streaming…";
 
@@ -140,7 +148,28 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
 
     private void OnFrameReceived(object? sender, GvspFrame frame)
     {
-        _dispatcher.Invoke(() => RenderFrame(frame));
+        Interlocked.Increment(ref _completedFrameCount);
+        Interlocked.Exchange(ref _pendingRenderFrame, frame);
+        QueueRender();
+    }
+
+    private void QueueRender()
+    {
+        if (Interlocked.Exchange(ref _renderQueued, 1) != 0)
+            return;
+
+        _dispatcher.BeginInvoke(RenderPendingFrame);
+    }
+
+    private void RenderPendingFrame()
+    {
+        var frame = Interlocked.Exchange(ref _pendingRenderFrame, null);
+        if (frame is not null)
+            RenderFrame(frame);
+
+        Interlocked.Exchange(ref _renderQueued, 0);
+        if (Volatile.Read(ref _pendingRenderFrame) is not null)
+            QueueRender();
     }
 
     private void OnUdpPacketReceived(int packetCount, int packetLength)
@@ -156,7 +185,7 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
             UdpPacketCount = packetCount;
             PacketSummary = _streamTransport?.PacketSummary ?? PacketSummary;
             if (_receivedFrameCount == 0)
-                StatusText = $"Receiving UDP ({UdpPacketCount} packets; {PacketSummary}), waiting for complete frame...";
+                StatusText = $"Receiving UDP ({UdpPacketCount} packets; {PacketSummary}), completed {Volatile.Read(ref _completedFrameCount)} frame(s), waiting for render...";
         });
     }
 
@@ -170,50 +199,22 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
             return;
         }
 
-        // Determine pixel format for WriteableBitmap
-        // We support Mono8 (0x01080001) and Mono16 (0x01100007); treat others as Mono8 best-effort.
-        var isMono16 = frame.PixelFormat == 0x01100007;
-        var expectedBytes = isMono16 ? width * height * 2 : width * height;
-        if (frame.Data.Length < expectedBytes)
-        {
-            _logger.LogWarning("Frame {FrameId} data too short: {Actual} < {Expected} bytes", frame.FrameId, frame.Data.Length, expectedBytes);
+        // Convert the camera payload into a WPF-friendly display buffer.
+        if (!TryConvertForDisplay(frame, width, height, out var displayData, out var displayFormat, out var stride, out var formatName, out var imageStats))
             return;
-        }
 
-        if (_bitmap is null || _bitmap.PixelWidth != width || _bitmap.PixelHeight != height)
+        if (_bitmap is null ||
+            _bitmap.PixelWidth != width ||
+            _bitmap.PixelHeight != height ||
+            _bitmap.Format != displayFormat)
         {
-            _logger.LogInformation("Creating bitmap {Width}x{Height} (PixelFormat=0x{PixelFormat:X8})", width, height, frame.PixelFormat);
-            _bitmap = new WriteableBitmap(width, height, 96, 96, PixelFormats.Gray8, null);
+            _logger.LogInformation("Creating bitmap {Width}x{Height} ({FormatName}, PixelFormat=0x{PixelFormat:X8})",
+                width, height, formatName, frame.PixelFormat);
+            _bitmap = new WriteableBitmap(width, height, 96, 96, displayFormat, null);
             Bitmap = _bitmap;
         }
 
-        _bitmap.Lock();
-        try
-        {
-            if (isMono16)
-            {
-                // Scale 16-bit → 8-bit for display
-                unsafe
-                {
-                    var dst = (byte*)_bitmap.BackBuffer;
-                    var src = frame.Data;
-                    for (int i = 0; i < width * height; i++)
-                    {
-                        ushort raw = (ushort)(src[i * 2] | (src[i * 2 + 1] << 8));
-                        dst[i] = (byte)(raw >> 8);
-                    }
-                }
-            }
-            else
-            {
-                System.Runtime.InteropServices.Marshal.Copy(frame.Data, 0, _bitmap.BackBuffer, width * height);
-            }
-            _bitmap.AddDirtyRect(new Int32Rect(0, 0, width, height));
-        }
-        finally
-        {
-            _bitmap.Unlock();
-        }
+        _bitmap.WritePixels(new Int32Rect(0, 0, width, height), displayData, stride, 0);
 
         // FPS calculation
         _receivedFrameCount++;
@@ -229,10 +230,272 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
             _lastFpsTime = now;
         }
 
-        Resolution = $"{width} × {height}";
+        Resolution = $"{width} x {height} {formatName}";
+        ImageStats = imageStats;
         UdpPacketCount = _streamTransport?.ReceivedPacketCount ?? UdpPacketCount;
         PacketSummary = _streamTransport?.PacketSummary ?? PacketSummary;
-        StatusText = $"{Fps:F1} fps  |  {Resolution}  |  {ReceivedFrames} frames  |  {UdpPacketCount} packets  |  {PacketSummary}";
+        StatusText = $"{Fps:F1} fps  |  {Resolution}  |  rendered {ReceivedFrames}, completed {Volatile.Read(ref _completedFrameCount)}  |  {imageStats}  |  {UdpPacketCount} packets  |  {PacketSummary}";
+    }
+
+    private bool TryConvertForDisplay(
+        GvspFrame frame,
+        int width,
+        int height,
+        out byte[] displayData,
+        out PixelFormat displayFormat,
+        out int stride,
+        out string formatName,
+        out string imageStats)
+    {
+        displayFormat = PixelFormats.Gray8;
+        stride = width;
+        formatName = GetPixelFormatName(frame.PixelFormat);
+        imageStats = GetByteStats(frame.Data);
+        displayData = [];
+
+        var pixelCount = checked(width * height);
+        switch (frame.PixelFormat)
+        {
+            case 0x01080001:
+            case 0x01080008:
+            case 0x01080009:
+            case 0x0108000A:
+            case 0x0108000B:
+                if (!HasEnoughData(frame, pixelCount, formatName))
+                    return false;
+                displayData = new byte[pixelCount];
+                Buffer.BlockCopy(frame.Data, 0, displayData, 0, pixelCount);
+                return true;
+            case 0x01100003:
+                return ConvertUnpackedMono(frame, pixelCount, 10, formatName, out displayData);
+            case 0x01100005:
+                return ConvertUnpackedMono(frame, pixelCount, 12, formatName, out displayData);
+            case 0x01100007:
+                return ConvertUnpackedMono(frame, pixelCount, 16, formatName, out displayData);
+            case 0x010C0004:
+                return ConvertMono10Packed(frame, pixelCount, formatName, out displayData);
+            case 0x010C0006:
+                return ConvertMono12Packed(frame, pixelCount, formatName, out displayData);
+            case 0x02180014:
+                displayFormat = PixelFormats.Bgr24;
+                stride = width * 3;
+                return ConvertRgb(frame, pixelCount, formatName, swapRedBlue: true, out displayData);
+            case 0x02180015:
+                displayFormat = PixelFormats.Bgr24;
+                stride = width * 3;
+                return ConvertRgb(frame, pixelCount, formatName, swapRedBlue: false, out displayData);
+            case 0x02200016:
+                displayFormat = PixelFormats.Bgr32;
+                stride = width * 4;
+                return ConvertRgba(frame, pixelCount, formatName, swapRedBlue: true, out displayData);
+            case 0x02200017:
+                displayFormat = PixelFormats.Bgr32;
+                stride = width * 4;
+                return ConvertRgba(frame, pixelCount, formatName, swapRedBlue: false, out displayData);
+            default:
+                if (!HasEnoughData(frame, pixelCount, formatName))
+                    return false;
+                _logger.LogWarning("Unsupported pixel format 0x{PixelFormat:X8}; displaying first byte per pixel as grayscale", frame.PixelFormat);
+                displayData = new byte[pixelCount];
+                Buffer.BlockCopy(frame.Data, 0, displayData, 0, pixelCount);
+                return true;
+        }
+    }
+
+    private bool ConvertUnpackedMono(GvspFrame frame, int pixelCount, int significantBits, string formatName, out byte[] displayData)
+    {
+        displayData = [];
+        if (!HasEnoughData(frame, pixelCount * 2, formatName))
+            return false;
+
+        var values = new ushort[pixelCount];
+        ushort min = ushort.MaxValue;
+        ushort max = ushort.MinValue;
+        for (var i = 0; i < pixelCount; i++)
+        {
+            var value = (ushort)(frame.Data[i * 2] | (frame.Data[i * 2 + 1] << 8));
+            if (significantBits < 16)
+                value = (ushort)Math.Min(value, (1 << significantBits) - 1);
+            values[i] = value;
+            min = Math.Min(min, value);
+            max = Math.Max(max, value);
+        }
+
+        displayData = ScaleMono(values, min, max);
+        return true;
+    }
+
+    private bool ConvertMono10Packed(GvspFrame frame, int pixelCount, string formatName, out byte[] displayData)
+    {
+        displayData = [];
+        var expectedBytes = (pixelCount * 10 + 7) / 8;
+        if (!HasEnoughData(frame, expectedBytes, formatName))
+            return false;
+
+        var values = new ushort[pixelCount];
+        ushort min = ushort.MaxValue;
+        ushort max = ushort.MinValue;
+        var source = frame.Data;
+        var src = 0;
+        var dst = 0;
+        while (dst < pixelCount)
+        {
+            var b0 = source[src++];
+            var b1 = src < source.Length ? source[src++] : 0;
+            var b2 = src < source.Length ? source[src++] : 0;
+            var b3 = src < source.Length ? source[src++] : 0;
+            var b4 = src < source.Length ? source[src++] : 0;
+            AddPackedValue((ushort)(b0 | ((b1 & 0x03) << 8)));
+            AddPackedValue((ushort)((b1 >> 2) | ((b2 & 0x0F) << 6)));
+            AddPackedValue((ushort)((b2 >> 4) | ((b3 & 0x3F) << 4)));
+            AddPackedValue((ushort)((b3 >> 6) | (b4 << 2)));
+        }
+
+        displayData = ScaleMono(values, min, max);
+        return true;
+
+        void AddPackedValue(ushort value)
+        {
+            if (dst >= pixelCount)
+                return;
+            values[dst++] = value;
+            min = Math.Min(min, value);
+            max = Math.Max(max, value);
+        }
+    }
+
+    private bool ConvertMono12Packed(GvspFrame frame, int pixelCount, string formatName, out byte[] displayData)
+    {
+        displayData = [];
+        var expectedBytes = (pixelCount * 12 + 7) / 8;
+        if (!HasEnoughData(frame, expectedBytes, formatName))
+            return false;
+
+        var values = new ushort[pixelCount];
+        ushort min = ushort.MaxValue;
+        ushort max = ushort.MinValue;
+        var source = frame.Data;
+        var src = 0;
+        var dst = 0;
+        while (dst < pixelCount)
+        {
+            var b0 = source[src++];
+            var b1 = src < source.Length ? source[src++] : 0;
+            var b2 = src < source.Length ? source[src++] : 0;
+            AddPackedValue((ushort)(b0 | ((b1 & 0x0F) << 8)));
+            AddPackedValue((ushort)((b1 >> 4) | (b2 << 4)));
+        }
+
+        displayData = ScaleMono(values, min, max);
+        return true;
+
+        void AddPackedValue(ushort value)
+        {
+            if (dst >= pixelCount)
+                return;
+            values[dst++] = value;
+            min = Math.Min(min, value);
+            max = Math.Max(max, value);
+        }
+    }
+
+    private bool ConvertRgb(GvspFrame frame, int pixelCount, string formatName, bool swapRedBlue, out byte[] displayData)
+    {
+        displayData = [];
+        var expectedBytes = pixelCount * 3;
+        if (!HasEnoughData(frame, expectedBytes, formatName))
+            return false;
+
+        displayData = new byte[expectedBytes];
+        for (var src = 0; src < expectedBytes; src += 3)
+        {
+            displayData[src] = swapRedBlue ? frame.Data[src + 2] : frame.Data[src];
+            displayData[src + 1] = frame.Data[src + 1];
+            displayData[src + 2] = swapRedBlue ? frame.Data[src] : frame.Data[src + 2];
+        }
+        return true;
+    }
+
+    private bool ConvertRgba(GvspFrame frame, int pixelCount, string formatName, bool swapRedBlue, out byte[] displayData)
+    {
+        displayData = [];
+        var expectedBytes = pixelCount * 4;
+        if (!HasEnoughData(frame, expectedBytes, formatName))
+            return false;
+
+        displayData = new byte[expectedBytes];
+        for (var src = 0; src < expectedBytes; src += 4)
+        {
+            displayData[src] = swapRedBlue ? frame.Data[src + 2] : frame.Data[src];
+            displayData[src + 1] = frame.Data[src + 1];
+            displayData[src + 2] = swapRedBlue ? frame.Data[src] : frame.Data[src + 2];
+            displayData[src + 3] = 255;
+        }
+        return true;
+    }
+
+    private static byte[] ScaleMono(ushort[] values, ushort min, ushort max)
+    {
+        var displayData = new byte[values.Length];
+        if (max <= min)
+        {
+            if (max > 0)
+                Array.Fill(displayData, (byte)255);
+            return displayData;
+        }
+
+        var scale = 255.0 / (max - min);
+        for (var i = 0; i < values.Length; i++)
+            displayData[i] = (byte)Math.Clamp((values[i] - min) * scale, 0, 255);
+
+        return displayData;
+    }
+
+    private bool HasEnoughData(GvspFrame frame, int expectedBytes, string formatName)
+    {
+        if (frame.Data.Length >= expectedBytes)
+            return true;
+
+        _logger.LogWarning("Frame {FrameId} {FormatName} data too short: {Actual} < {Expected} bytes",
+            frame.FrameId, formatName, frame.Data.Length, expectedBytes);
+        return false;
+    }
+
+    private static string GetPixelFormatName(uint pixelFormat) => pixelFormat switch
+    {
+        0x01080001 => "Mono8",
+        0x01100003 => "Mono10",
+        0x010C0004 => "Mono10Packed",
+        0x01100005 => "Mono12",
+        0x010C0006 => "Mono12Packed",
+        0x01100007 => "Mono16",
+        0x01080008 => "BayerGR8",
+        0x01080009 => "BayerRG8",
+        0x0108000A => "BayerGB8",
+        0x0108000B => "BayerBG8",
+        0x02180014 => "RGB8",
+        0x02180015 => "BGR8",
+        0x02200016 => "RGBA8",
+        0x02200017 => "BGRA8",
+        _ => $"0x{pixelFormat:X8}",
+    };
+
+    private static string GetByteStats(byte[] data)
+    {
+        if (data.Length == 0)
+            return "empty payload";
+
+        byte min = byte.MaxValue;
+        byte max = byte.MinValue;
+        long sum = 0;
+        foreach (var value in data)
+        {
+            min = Math.Min(min, value);
+            max = Math.Max(max, value);
+            sum += value;
+        }
+
+        return $"raw min:{min} max:{max} avg:{sum / (double)data.Length:F1}";
     }
 
     public void StopStreaming()

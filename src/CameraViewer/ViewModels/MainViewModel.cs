@@ -19,6 +19,8 @@ namespace CameraViewer.ViewModels;
 public sealed partial class MainViewModel : ObservableObject
 {
     private const int DefaultStreamPort = 50000;
+    private const int HeartbeatTimeoutMs = 30000;
+    private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(1);
 
     private readonly ILogger<MainViewModel> _logger;
 
@@ -38,6 +40,7 @@ public sealed partial class MainViewModel : ObservableObject
     private GvcpClient? _gvcpClient;
     private GigECameraInfo? _connectedCamera;
     private NodeMap? _nodeMap;
+    private CancellationTokenSource? _heartbeatCts;
 
     public MainViewModel(Dispatcher dispatcher, ILoggerFactory loggerFactory)
     {
@@ -68,6 +71,7 @@ public sealed partial class MainViewModel : ObservableObject
         {
             _logger.LogError(ex, "Failed to connect to camera at {IpAddress}", cam.IpAddress);
             ConnectionStatus = $"Connection failed: {ex.Message}";
+            StopHeartbeat();
         }
     }
 
@@ -78,6 +82,7 @@ public sealed partial class MainViewModel : ObservableObject
         IsCameraConnected = false;
 
         // Close any previous GVCP connection
+        StopHeartbeat();
         _gvcpClient?.Dispose();
         _gvcpClient = null;
         _connectedCamera = cam;
@@ -135,6 +140,8 @@ public sealed partial class MainViewModel : ObservableObject
                 _logger.LogDebug("Local IP for camera: {LocalIp}", localIp);
 
                 await TakeControlAsync(_gvcpClient);
+                await ConfigureHeartbeatAsync(_gvcpClient, _nodeMap);
+                StartHeartbeat(_gvcpClient);
                 ConfigureAcquisitionDefaults(_nodeMap);
                 await ConfigureStreamAsync(_gvcpClient, _nodeMap, localIp, localPort);
 
@@ -156,6 +163,7 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 _logger.LogError(ex, "Stream setup failed");
                 ConnectionStatus = $"Stream setup failed: {ex.Message}";
+                StopHeartbeat();
                 StreamVm.StopStreaming();
             }
         }
@@ -172,6 +180,7 @@ public sealed partial class MainViewModel : ObservableObject
     private async Task StopAcquisitionAsync()
     {
         _logger.LogInformation("Stopping acquisition");
+        StopHeartbeat();
 
         // Execute AcquisitionStop command to tell the camera to stop streaming
         var stopCmd = _nodeMap?.GetNode("AcquisitionStop") as ICommand;
@@ -309,6 +318,62 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
+    private async Task ConfigureHeartbeatAsync(GvcpClient client, NodeMap? nodeMap)
+    {
+        if (TrySetIntegerNode(nodeMap, "GevHeartbeatTimeout", HeartbeatTimeoutMs) ||
+            TrySetIntegerNode(nodeMap, "DeviceLinkHeartbeatTimeout", HeartbeatTimeoutMs))
+        {
+            return;
+        }
+
+        try
+        {
+            await client.WriteRegisterAsync(GvcpConstants.HeartbeatTimeoutRegister, HeartbeatTimeoutMs);
+            _logger.LogInformation("Set GVCP heartbeat timeout register to {HeartbeatTimeoutMs} ms", HeartbeatTimeoutMs);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not set GVCP heartbeat timeout; continuing with periodic heartbeat reads");
+        }
+    }
+
+    private void StartHeartbeat(GvcpClient client)
+    {
+        StopHeartbeat();
+        _heartbeatCts = new CancellationTokenSource();
+        var token = _heartbeatCts.Token;
+
+        _ = Task.Run(async () =>
+        {
+            using var timer = new PeriodicTimer(HeartbeatInterval);
+            try
+            {
+                while (await timer.WaitForNextTickAsync(token))
+                {
+                    await client.ReadRegisterAsync(GvcpConstants.CcpRegister, token);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected when acquisition stops.
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "GVCP heartbeat loop stopped unexpectedly");
+            }
+        }, token);
+    }
+
+    private void StopHeartbeat()
+    {
+        if (_heartbeatCts is null)
+            return;
+
+        _heartbeatCts.Cancel();
+        _heartbeatCts.Dispose();
+        _heartbeatCts = null;
+    }
+
     private async Task ConfigureStreamAsync(GvcpClient client, NodeMap? nodeMap, IPAddress localIp, int localPort)
     {
         var ipBytes = localIp.GetAddressBytes();
@@ -340,40 +405,95 @@ public sealed partial class MainViewModel : ObservableObject
     private void ConfigureAcquisitionDefaults(NodeMap? nodeMap)
     {
         TrySetEnumerationNode(nodeMap, "AcquisitionMode", "Continuous");
+        TrySetEnumerationNode(nodeMap, "TriggerSelector", "FrameStart");
         TrySetEnumerationNode(nodeMap, "TriggerMode", "Off");
+        TrySetEnumerationNode(nodeMap, "ExposureAuto", "Continuous", "Once");
+        TrySetEnumerationNode(nodeMap, "GainAuto", "Continuous", "Once");
+        TrySetIntegerNode(nodeMap, "AcquisitionFrameCount", 10_000);
+        TrySetIntegerNode(nodeMap, "AcquisitionBurstFrameCount", 10_000);
     }
 
     private bool TrySetIntegerNode(NodeMap? nodeMap, string nodeName, long value)
     {
         try
         {
-            if (nodeMap?.GetNode(nodeName) is not IInteger node || node.AccessMode != AccessMode.RW)
+            if (nodeMap?.GetNode(nodeName) is not IInteger node)
                 return false;
 
+            if (!IsWritable(node.AccessMode))
+            {
+                _logger.LogInformation("Skipping {NodeName}; access mode is {AccessMode}", nodeName, node.AccessMode);
+                return false;
+            }
+
             node.Value = ClampToIncrement(value, node);
-            _logger.LogDebug("Set {NodeName}={Value}", nodeName, node.Value);
+            _logger.LogInformation("Set {NodeName}={Value}", nodeName, SafeReadInteger(node));
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Could not set integer node {NodeName}", nodeName);
+            _logger.LogWarning(ex, "Could not set integer node {NodeName}", nodeName);
             return false;
         }
     }
 
-    private void TrySetEnumerationNode(NodeMap? nodeMap, string nodeName, string value)
+    private bool TrySetEnumerationNode(NodeMap? nodeMap, string nodeName, params string[] values)
     {
         try
         {
-            if (nodeMap?.GetNode(nodeName) is IEnumeration node && node.AccessMode == AccessMode.RW)
+            if (nodeMap?.GetNode(nodeName) is not IEnumeration node)
+                return false;
+
+            if (!IsWritable(node.AccessMode))
             {
-                node.Value = value;
-                _logger.LogDebug("Set {NodeName}={Value}", nodeName, value);
+                _logger.LogInformation("Skipping {NodeName}; access mode is {AccessMode}", nodeName, node.AccessMode);
+                return false;
             }
+
+            var entry = values
+                .Select(value => node.GetEntryByName(value) ?? node.Entries.FirstOrDefault(e => string.Equals(e.Symbolic, value, StringComparison.OrdinalIgnoreCase)))
+                .FirstOrDefault(e => e is not null);
+            if (entry is null)
+            {
+                _logger.LogInformation("Could not set {NodeName}; none of [{Values}] exist. Available: {Entries}",
+                    nodeName, string.Join(", ", values), string.Join(", ", node.Entries.Select(e => e.Symbolic)));
+                return false;
+            }
+
+            node.Value = entry.Symbolic;
+            _logger.LogInformation("Set {NodeName}={Value}", nodeName, SafeReadEnumeration(node));
+            return true;
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Could not set enumeration node {NodeName}={Value}", nodeName, value);
+            _logger.LogWarning(ex, "Could not set enumeration node {NodeName}", nodeName);
+            return false;
+        }
+    }
+
+    private static bool IsWritable(AccessMode accessMode) => accessMode is AccessMode.RW or AccessMode.WO;
+
+    private static string SafeReadInteger(IInteger node)
+    {
+        try
+        {
+            return node.AccessMode == AccessMode.WO ? "<write-only>" : node.Value.ToString();
+        }
+        catch
+        {
+            return "<unreadable>";
+        }
+    }
+
+    private static string SafeReadEnumeration(IEnumeration node)
+    {
+        try
+        {
+            return node.AccessMode == AccessMode.WO ? "<write-only>" : node.Value;
+        }
+        catch
+        {
+            return "<unreadable>";
         }
     }
 
