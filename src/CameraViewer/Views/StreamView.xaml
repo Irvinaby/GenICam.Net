@@ -27,14 +27,14 @@
                            Style="{StaticResource SectionHeader}" Margin="0"/>
 
                 <Button Grid.Column="1"
-                        Command="{Binding StartCommand}"
+                        Command="{Binding DataContext.StartAcquisitionCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                         Style="{StaticResource AccentButton}"
                         Padding="8,3" FontSize="11"
                         Margin="0,0,4,0">
                     ▶ Start
                 </Button>
                 <Button Grid.Column="2"
-                        Command="{Binding StopCommand}"
+                        Command="{Binding DataContext.StopAcquisitionCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                         Style="{StaticResource DangerButton}"
                         Padding="8,3" FontSize="11">
                     ■ Stop

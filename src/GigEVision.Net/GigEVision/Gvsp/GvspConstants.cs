@@ -9,10 +9,10 @@ public enum GvspPacketType : byte
     Leader = 1,
 
     /// <summary>Payload packet — contains image pixel data.</summary>
-    Payload = 2,
+    Payload = 3,
 
     /// <summary>Trailer packet — last packet of a block, signals frame completion.</summary>
-    Trailer = 3,
+    Trailer = 2,
 }
 
 /// <summary>

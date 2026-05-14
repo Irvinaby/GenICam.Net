@@ -7,6 +7,7 @@ using CommunityToolkit.Mvvm.Input;
 using GenICam.Net.GigEVision.Gvcp;
 using GenICam.Net.GigEVision.Gvsp;
 using Microsoft.Extensions.Logging;
+using System.Net;
 
 namespace CameraViewer.ViewModels;
 
@@ -21,8 +22,10 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
     private CancellationTokenSource? _cts;
     private WriteableBitmap? _bitmap;
     private readonly Dispatcher _dispatcher;
+    private CountingUdpTransport? _streamTransport;
 
     private int _frameCount;
+    private int _receivedFrameCount;
     private DateTime _lastFpsTime = DateTime.UtcNow;
 
     [ObservableProperty]
@@ -36,6 +39,15 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private string _resolution = string.Empty;
+
+    [ObservableProperty]
+    private int _udpPacketCount;
+
+    [ObservableProperty]
+    private int _receivedFrames;
+
+    [ObservableProperty]
+    private string _packetSummary = string.Empty;
 
     public WriteableBitmap? Bitmap
     {
@@ -66,13 +78,21 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
         {
             _cts = new CancellationTokenSource();
             var udpClient = new System.Net.Sockets.UdpClient(streamPort);
+            udpClient.Client.ReceiveBufferSize = 64 * 1024 * 1024;
             var localPort = ((System.Net.IPEndPoint)udpClient.Client.LocalEndPoint!).Port;
-            var transport = new UdpTransportAdapter(udpClient);
+            _streamTransport = new CountingUdpTransport(new UdpTransportAdapter(udpClient), OnUdpPacketReceived);
 
-            _receiver = new GvspReceiver(transport);
+            _receiver = new GvspReceiver(_streamTransport);
             _receiver.FrameReceived += OnFrameReceived;
 
             IsStreaming = true;
+            Fps = 0;
+            UdpPacketCount = 0;
+            ReceivedFrames = 0;
+            PacketSummary = string.Empty;
+            _frameCount = 0;
+            _receivedFrameCount = 0;
+            _lastFpsTime = DateTime.UtcNow;
             StatusText = "Streaming…";
 
             _logger.LogInformation("GVSP receiver started on local port {Port}", localPort);
@@ -96,6 +116,12 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
     private bool IsNotStreaming() => !IsStreaming;
     private bool CanStop() => IsStreaming;
 
+    partial void OnIsStreamingChanged(bool value)
+    {
+        StartCommand.NotifyCanExecuteChanged();
+        StopCommand.NotifyCanExecuteChanged();
+    }
+
     private async Task RunReceiveLoopAsync()
     {
         try
@@ -115,6 +141,23 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
     private void OnFrameReceived(object? sender, GvspFrame frame)
     {
         _dispatcher.Invoke(() => RenderFrame(frame));
+    }
+
+    private void OnUdpPacketReceived(int packetCount, int packetLength)
+    {
+        if (packetCount <= 5)
+            _logger.LogDebug("GVSP UDP packet {PacketCount}: {Length} bytes", packetCount, packetLength);
+
+        if (packetCount % 500 != 0)
+            return;
+
+        _dispatcher.BeginInvoke(() =>
+        {
+            UdpPacketCount = packetCount;
+            PacketSummary = _streamTransport?.PacketSummary ?? PacketSummary;
+            if (_receivedFrameCount == 0)
+                StatusText = $"Receiving UDP ({UdpPacketCount} packets; {PacketSummary}), waiting for complete frame...";
+        });
     }
 
     private void RenderFrame(GvspFrame frame)
@@ -173,6 +216,8 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
         }
 
         // FPS calculation
+        _receivedFrameCount++;
+        ReceivedFrames = _receivedFrameCount;
         _frameCount++;
         var now = DateTime.UtcNow;
         var elapsed = (now - _lastFpsTime).TotalSeconds;
@@ -185,7 +230,9 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
         }
 
         Resolution = $"{width} × {height}";
-        StatusText = $"{Fps:F1} fps  |  {Resolution}";
+        UdpPacketCount = _streamTransport?.ReceivedPacketCount ?? UdpPacketCount;
+        PacketSummary = _streamTransport?.PacketSummary ?? PacketSummary;
+        StatusText = $"{Fps:F1} fps  |  {Resolution}  |  {ReceivedFrames} frames  |  {UdpPacketCount} packets  |  {PacketSummary}";
     }
 
     public void StopStreaming()
@@ -199,6 +246,7 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
             _receiver.Dispose();
             _receiver = null;
         }
+        _streamTransport = null;
         _cts?.Dispose();
         _cts = null;
         IsStreaming = false;
@@ -208,4 +256,55 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
     }
 
     public void Dispose() => StopStreaming();
+
+    private sealed class CountingUdpTransport(IUdpTransport inner, Action<int, int> packetReceived) : IUdpTransport
+    {
+        public int ReceivedPacketCount { get; private set; }
+        public int LeaderCount { get; private set; }
+        public int TrailerCount { get; private set; }
+        public int PayloadCount { get; private set; }
+        public int OtherCount { get; private set; }
+        public string PacketSummary => $"L:{LeaderCount} P:{PayloadCount} T:{TrailerCount} O:{OtherCount}";
+
+        public Task SendAsync(byte[] data, IPEndPoint endPoint, CancellationToken cancellationToken = default)
+            => inner.SendAsync(data, endPoint, cancellationToken);
+
+        public async Task<GenICam.Net.GigEVision.Gvcp.UdpReceiveResult> ReceiveAsync(CancellationToken cancellationToken = default)
+        {
+            var result = await inner.ReceiveAsync(cancellationToken);
+            ReceivedPacketCount++;
+            CountPacketType(result.Buffer);
+            packetReceived(ReceivedPacketCount, result.Buffer.Length);
+            return result;
+        }
+
+        public void EnableBroadcast() => inner.EnableBroadcast();
+
+        public void Dispose() => inner.Dispose();
+
+        private void CountPacketType(byte[] packet)
+        {
+            if (packet.Length < GvspConstants.GenericHeaderSize)
+            {
+                OtherCount++;
+                return;
+            }
+
+            switch ((GvspPacketType)packet[4])
+            {
+                case GvspPacketType.Leader:
+                    LeaderCount++;
+                    break;
+                case GvspPacketType.Payload:
+                    PayloadCount++;
+                    break;
+                case GvspPacketType.Trailer:
+                    TrailerCount++;
+                    break;
+                default:
+                    OtherCount++;
+                    break;
+            }
+        }
+    }
 }

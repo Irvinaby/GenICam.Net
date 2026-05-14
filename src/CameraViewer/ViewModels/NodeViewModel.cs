@@ -29,7 +29,7 @@ public sealed partial class NodeViewModel : ObservableObject
                 return;
             }
             Children = new ObservableCollection<NodeViewModel>(
-                cat.Features.Select(f => new NodeViewModel(f, visited)));
+                cat.Features.Select(f => new NodeViewModel(f, new HashSet<string>(visited, StringComparer.Ordinal))));
         }
         else
         {

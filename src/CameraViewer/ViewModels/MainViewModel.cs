@@ -18,6 +18,8 @@ namespace CameraViewer.ViewModels;
 /// </summary>
 public sealed partial class MainViewModel : ObservableObject
 {
+    private const int DefaultStreamPort = 50000;
+
     private readonly ILogger<MainViewModel> _logger;
 
     [ObservableProperty]
@@ -43,6 +45,14 @@ public sealed partial class MainViewModel : ObservableObject
         CameraVm = new CameraViewModel(loggerFactory.CreateLogger<CameraViewModel>());
         NodeTreeVm = new NodeTreeViewModel();
         StreamVm = new StreamViewModel(dispatcher, loggerFactory.CreateLogger<StreamViewModel>());
+        StreamVm.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(StreamViewModel.IsStreaming))
+            {
+                StartAcquisitionCommand.NotifyCanExecuteChanged();
+                StopAcquisitionCommand.NotifyCanExecuteChanged();
+            }
+        };
 
         CameraVm.CameraConnectRequested += OnCameraConnectRequested;
         _logger.LogInformation("MainViewModel initialized");
@@ -105,11 +115,11 @@ public sealed partial class MainViewModel : ObservableObject
         IsCameraConnected = true;
     }
 
-    [RelayCommand(CanExecute = nameof(IsCameraConnected))]
+    [RelayCommand(CanExecute = nameof(CanStartAcquisition))]
     private async Task StartAcquisitionAsync()
     {
         _logger.LogInformation("Starting acquisition");
-        var localPort = StreamVm.StartStreaming();
+        var localPort = StreamVm.StartStreaming(DefaultStreamPort);
         if (localPort == 0)
         {
             _logger.LogWarning("StartStreaming returned port 0; aborting acquisition start");
@@ -124,20 +134,9 @@ public sealed partial class MainViewModel : ObservableObject
                 var localIp = GetLocalIpForCamera(_connectedCamera.IpAddress);
                 _logger.LogDebug("Local IP for camera: {LocalIp}", localIp);
 
-                // Take exclusive control of the camera
-                await _gvcpClient.WriteRegisterAsync(GvcpConstants.CcpRegister, 2);
-                _logger.LogDebug("Exclusive control acquired (CCP register)");
-
-                // Configure stream channel 0: destination address (host IP as big-endian uint32)
-                var ipBytes = localIp.GetAddressBytes();
-                var ipValue = BinaryPrimitives.ReadUInt32BigEndian(ipBytes);
-                await _gvcpClient.WriteRegisterAsync(GvcpConstants.Scda0Register, ipValue);
-                _logger.LogDebug("Stream destination configured: SCDA0={IpValue:X8}", ipValue);
-
-                // Configure stream channel 0: host port in bits [31:16], enable in bit 0
-                var scpValue = ((uint)localPort << 16) | 1u;
-                await _gvcpClient.WriteRegisterAsync(GvcpConstants.Scp0Register, scpValue);
-                _logger.LogDebug("Stream channel enabled: SCP0={ScpValue:X8} (port {Port})", scpValue, localPort);
+                await TakeControlAsync(_gvcpClient);
+                ConfigureAcquisitionDefaults(_nodeMap);
+                await ConfigureStreamAsync(_gvcpClient, _nodeMap, localIp, localPort);
 
                 // Execute AcquisitionStart command to tell the camera to begin streaming
                 var startCmd = _nodeMap?.GetNode("AcquisitionStart") as ICommand;
@@ -157,6 +156,7 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 _logger.LogError(ex, "Stream setup failed");
                 ConnectionStatus = $"Stream setup failed: {ex.Message}";
+                StreamVm.StopStreaming();
             }
         }
         else
@@ -294,6 +294,98 @@ public sealed partial class MainViewModel : ObservableObject
         return result;
     }
 
+    private async Task TakeControlAsync(GvcpClient client)
+    {
+        try
+        {
+            await client.WriteRegisterAsync(GvcpConstants.CcpRegister, 2);
+            _logger.LogDebug("Exclusive control acquired (CCP register)");
+        }
+        catch (GvcpException ex)
+        {
+            _logger.LogWarning(ex, "Exclusive control failed; trying control privilege");
+            await client.WriteRegisterAsync(GvcpConstants.CcpRegister, 1);
+            _logger.LogDebug("Control privilege acquired (CCP register)");
+        }
+    }
+
+    private async Task ConfigureStreamAsync(GvcpClient client, NodeMap? nodeMap, IPAddress localIp, int localPort)
+    {
+        var ipBytes = localIp.GetAddressBytes();
+        var ipValue = BinaryPrimitives.ReadUInt32BigEndian(ipBytes);
+
+        _logger.LogInformation("Configuring stream: localIp={LocalIp}, port={Port}, destination=0x{Destination:X8}", localIp, localPort, ipValue);
+
+        TrySetIntegerNode(nodeMap, "GevSCPHostPort", localPort);
+        TrySetIntegerNode(nodeMap, "GevSCPSPacketSize", 1500);
+
+        if (!TrySetIntegerNode(nodeMap, "GevSCDA", ipValue))
+        {
+            try
+            {
+                await client.WriteRegisterAsync(GvcpConstants.Scda0Register, ipValue);
+                _logger.LogDebug("Stream destination configured: SCDA0={IpValue:X8}", ipValue);
+            }
+            catch (GvcpException ex) when (ex.Status == GvcpStatus.WriteProtect)
+            {
+                _logger.LogInformation("Stream destination address is write-protected; keeping the camera's current destination address");
+            }
+        }
+
+        await client.WriteRegisterAsync(GvcpConstants.Scp0Register, (uint)localPort);
+        await client.WriteRegisterAsync(GvcpConstants.Scps0Register, 1500);
+        _logger.LogDebug("Stream channel registers configured: SCP0={Port}, SCPS0=1500", localPort);
+    }
+
+    private void ConfigureAcquisitionDefaults(NodeMap? nodeMap)
+    {
+        TrySetEnumerationNode(nodeMap, "AcquisitionMode", "Continuous");
+        TrySetEnumerationNode(nodeMap, "TriggerMode", "Off");
+    }
+
+    private bool TrySetIntegerNode(NodeMap? nodeMap, string nodeName, long value)
+    {
+        try
+        {
+            if (nodeMap?.GetNode(nodeName) is not IInteger node || node.AccessMode != AccessMode.RW)
+                return false;
+
+            node.Value = ClampToIncrement(value, node);
+            _logger.LogDebug("Set {NodeName}={Value}", nodeName, node.Value);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not set integer node {NodeName}", nodeName);
+            return false;
+        }
+    }
+
+    private void TrySetEnumerationNode(NodeMap? nodeMap, string nodeName, string value)
+    {
+        try
+        {
+            if (nodeMap?.GetNode(nodeName) is IEnumeration node && node.AccessMode == AccessMode.RW)
+            {
+                node.Value = value;
+                _logger.LogDebug("Set {NodeName}={Value}", nodeName, value);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not set enumeration node {NodeName}={Value}", nodeName, value);
+        }
+    }
+
+    private static long ClampToIncrement(long value, IInteger node)
+    {
+        var clamped = Math.Min(Math.Max(value, node.Min), node.Max);
+        if (node.Increment <= 1)
+            return clamped;
+
+        return node.Min + ((clamped - node.Min) / node.Increment) * node.Increment;
+    }
+
     private static uint ParseHex(string hex)
     {
         if (hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
@@ -340,6 +432,7 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     private bool CanStopAcquisition() => IsCameraConnected && StreamVm.IsStreaming;
+    private bool CanStartAcquisition() => IsCameraConnected && !StreamVm.IsStreaming;
 
     partial void OnIsCameraConnectedChanged(bool value)
     {

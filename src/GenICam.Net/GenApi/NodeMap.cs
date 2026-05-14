@@ -99,6 +99,11 @@ public class NodeMap : INodeMap
             if (node.RegisterAddress.HasValue)
                 node.Port = port;
         }
+        foreach (var node in _nodes.Values.OfType<StringNode>())
+        {
+            if (node.RegisterAddress.HasValue)
+                node.Port = port;
+        }
 
         // Wire node map to command nodes
         foreach (var node in _nodes.Values.OfType<CommandNode>())
@@ -115,6 +120,8 @@ public class NodeMap : INodeMap
                 intNode.InvalidateCache();
             else if (node is FloatNode floatNode)
                 floatNode.InvalidateCache();
+            else if (node is StringNode stringNode)
+                stringNode.InvalidateCache();
 
             node.InvalidateNode();
         }

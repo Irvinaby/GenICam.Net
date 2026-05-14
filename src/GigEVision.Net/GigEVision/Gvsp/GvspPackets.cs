@@ -5,7 +5,7 @@ namespace GenICam.Net.GigEVision.Gvsp;
 /// <summary>
 /// GVSP generic packet header (8 bytes, big-endian).
 /// All GVSP packets (leader, payload, trailer) share this common header.
-/// Format: [Status(2)] [BlockId(2)] [PacketFormat(1,upper nibble=PacketType)] [PacketId(3 bytes, 24-bit)]
+/// Format: [Status(2)] [BlockId(2)] [PacketFormat(1)] [PacketId(3 bytes, 24-bit)]
 /// </summary>
 public readonly struct GvspHeader
 {
@@ -36,8 +36,7 @@ public readonly struct GvspHeader
         var buffer = new byte[GvspConstants.GenericHeaderSize];
         BinaryPrimitives.WriteUInt16BigEndian(buffer.AsSpan(0), Status);
         BinaryPrimitives.WriteUInt16BigEndian(buffer.AsSpan(2), BlockId);
-        // PacketFormat byte: upper 4 bits = packet type
-        buffer[4] = (byte)((byte)PacketType << 4);
+        buffer[4] = (byte)PacketType;
         // PacketId: 24-bit big-endian in bytes 5..7
         buffer[5] = (byte)((PacketId >> 16) & 0xFF);
         buffer[6] = (byte)((PacketId >> 8) & 0xFF);
@@ -53,7 +52,7 @@ public readonly struct GvspHeader
 
         var status = BinaryPrimitives.ReadUInt16BigEndian(data[0..]);
         var blockId = BinaryPrimitives.ReadUInt16BigEndian(data[2..]);
-        var packetType = (GvspPacketType)(data[4] >> 4);
+        var packetType = (GvspPacketType)data[4];
         var packetId = (uint)((data[5] << 16) | (data[6] << 8) | data[7]);
 
         return new GvspHeader(status, blockId, packetType, packetId);

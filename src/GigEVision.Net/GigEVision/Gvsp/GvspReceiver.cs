@@ -98,6 +98,8 @@ public class GvspReceiver : IDisposable
         if (leaderPayload.Length < GvspConstants.ImageLeaderPayloadSize)
             return;
 
+        CompletePendingFrames();
+
         var leader = GvspImageLeader.FromBytes(leaderPayload);
 
         _pendingFrames[header.BlockId] = new FrameAssembly
@@ -122,7 +124,24 @@ public class GvspReceiver : IDisposable
             return;
 
         _pendingFrames.Remove(header.BlockId);
+        CompleteFrame(assembly);
+    }
 
+    private void CompletePendingFrames()
+    {
+        if (_pendingFrames.Count == 0)
+            return;
+
+        foreach (var assembly in _pendingFrames.Values.ToList())
+        {
+            CompleteFrame(assembly);
+        }
+
+        _pendingFrames.Clear();
+    }
+
+    private void CompleteFrame(FrameAssembly assembly)
+    {
         // Reassemble payload data in packet order
         assembly.PayloadChunks.Sort((a, b) => a.packetId.CompareTo(b.packetId));
 

@@ -306,6 +306,14 @@ public static class NodeMapParser
         var maxLen = element.Element(ns + "MaxLength")?.Value;
         if (maxLen != null) node.MaxLength = ParseLong(maxLen);
 
+        var address = element.Element(ns + "Address")?.Value;
+        if (address != null)
+            node.RegisterAddress = ParseLong(address);
+
+        var length = element.Element(ns + "Length")?.Value;
+        if (length != null)
+            node.RegisterLength = ParseLong(length);
+
         return node;
     }
 

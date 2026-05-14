@@ -113,6 +113,25 @@ public class GvspReceiverTests
     }
 
     [Test]
+    public void ProcessPacket_NewLeaderAfterMissingTrailer_CompletesPreviousFrame()
+    {
+        var transport = new Tests.GigEVision.Gvcp.FakeUdpTransport();
+        using var receiver = new GvspReceiver(transport);
+
+        var frames = new List<GvspFrame>();
+        receiver.FrameReceived += (_, frame) => frames.Add(frame);
+
+        receiver.ProcessPacket(BuildLeaderPacket(1, 2, 1));
+        receiver.ProcessPacket(BuildPayloadPacket(1, 1, new byte[] { 0xAA, 0xBB }));
+
+        receiver.ProcessPacket(BuildLeaderPacket(2, 2, 1));
+
+        Assert.That(frames, Has.Count.EqualTo(1));
+        Assert.That(frames[0].FrameId, Is.EqualTo(1));
+        Assert.That(frames[0].Data, Is.EqualTo(new byte[] { 0xAA, 0xBB }));
+    }
+
+    [Test]
     public void ProcessPacket_TooShort_Ignored()
     {
         var transport = new Tests.GigEVision.Gvcp.FakeUdpTransport();
