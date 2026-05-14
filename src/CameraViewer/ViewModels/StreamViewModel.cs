@@ -210,11 +210,10 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
         {
             _logger.LogInformation("Creating bitmap {Width}x{Height} ({FormatName}, PixelFormat=0x{PixelFormat:X8})",
                 width, height, formatName, frame.PixelFormat);
-            _bitmap = new WriteableBitmap(width, height, 96, 96, displayFormat, null);
-            Bitmap = _bitmap;
+            Bitmap = new WriteableBitmap(width, height, 96, 96, displayFormat, null);
         }
 
-        _bitmap.WritePixels(new Int32Rect(0, 0, width, height), displayData, stride, 0);
+        _bitmap!.WritePixels(new Int32Rect(0, 0, width, height), displayData, stride, 0);
 
         // FPS calculation
         _receivedFrameCount++;
