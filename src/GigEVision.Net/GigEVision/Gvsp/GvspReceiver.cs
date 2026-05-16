@@ -19,6 +19,8 @@ namespace GenICam.Net.GigEVision.Gvsp;
 /// </remarks>
 public class GvspReceiver : IDisposable
 {
+    private const int MaxPendingFrames = 4;
+
     private readonly IUdpTransport _transport;
     private readonly ILogger<GvspReceiver> _logger;
     private readonly Dictionary<ushort, FrameAssembly> _pendingFrames = new();
@@ -98,8 +100,6 @@ public class GvspReceiver : IDisposable
         if (leaderPayload.Length < GvspConstants.ImageLeaderPayloadSize)
             return;
 
-        DropPendingFrames("new leader received before trailer");
-
         var leader = GvspImageLeader.FromBytes(leaderPayload);
 
         _pendingFrames[header.BlockId] = new FrameAssembly
@@ -107,6 +107,7 @@ public class GvspReceiver : IDisposable
             BlockId = header.BlockId,
             Leader = leader,
         };
+        TrimPendingFrames();
     }
 
     private void ProcessPayload(GvspHeader header, byte[] packetData)
@@ -114,11 +115,11 @@ public class GvspReceiver : IDisposable
         if (!_pendingFrames.TryGetValue(header.BlockId, out var assembly))
             return;
 
-        if (assembly.PayloadChunks.Any(chunk => chunk.packetId == header.PacketId))
+        if (assembly.PayloadChunks.ContainsKey(header.PacketId))
             return;
 
         var payloadData = packetData.AsSpan(GvspConstants.GenericHeaderSize).ToArray();
-        assembly.PayloadChunks.Add((header.PacketId, payloadData));
+        assembly.PayloadChunks.Add(header.PacketId, payloadData);
     }
 
     private void ProcessTrailer(GvspHeader header, byte[] packetData)
@@ -133,31 +134,32 @@ public class GvspReceiver : IDisposable
         TryCompleteFrame(assembly);
     }
 
-    private void DropPendingFrames(string reason)
+    private void TrimPendingFrames()
     {
-        if (_pendingFrames.Count == 0)
+        if (_pendingFrames.Count <= MaxPendingFrames)
             return;
 
-        foreach (var assembly in _pendingFrames.Values.ToList())
-        {
-            _logger.LogDebug("Dropping incomplete frame {FrameId}: {Reason}", assembly.BlockId, reason);
-        }
+        var oldest = _pendingFrames.Values.MinBy(assembly => assembly.Sequence);
+        if (oldest is null)
+            return;
 
-        _pendingFrames.Clear();
+        if (_pendingFrames.Remove(oldest.BlockId))
+        {
+            _logger.LogDebug(
+                "Dropping incomplete frame {FrameId}: pending frame limit exceeded",
+                oldest.BlockId);
+        }
     }
 
     private void TryCompleteFrame(FrameAssembly assembly)
     {
-        // Reassemble payload data in packet order
-        assembly.PayloadChunks.Sort((a, b) => a.packetId.CompareTo(b.packetId));
-
         var totalLength = 0;
-        foreach (var (_, data) in assembly.PayloadChunks)
+        foreach (var data in assembly.PayloadChunks.Values)
             totalLength += data.Length;
 
         var frameData = new byte[totalLength];
         var offset = 0;
-        foreach (var (_, data) in assembly.PayloadChunks)
+        foreach (var data in assembly.PayloadChunks.OrderBy(chunk => chunk.Key).Select(chunk => chunk.Value))
         {
             data.CopyTo(frameData, offset);
             offset += data.Length;
@@ -222,8 +224,11 @@ public class GvspReceiver : IDisposable
 
     private class FrameAssembly
     {
+        private static long _nextSequence;
+
         public ushort BlockId { get; init; }
+        public long Sequence { get; } = Interlocked.Increment(ref _nextSequence);
         public GvspImageLeader Leader { get; set; }
-        public List<(uint packetId, byte[] data)> PayloadChunks { get; } = [];
+        public Dictionary<uint, byte[]> PayloadChunks { get; } = [];
     }
 }

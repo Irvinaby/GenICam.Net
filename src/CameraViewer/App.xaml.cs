@@ -10,6 +10,7 @@ namespace CameraViewer;
 public partial class App : Application
 {
     private ILoggerFactory? _loggerFactory;
+    private MainViewModel? _mainViewModel;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -30,13 +31,14 @@ public partial class App : Application
                 .AddSerilog(dispose: true);
         });
 
-        var vm = new MainViewModel(Dispatcher.CurrentDispatcher, _loggerFactory);
-        var window = new Views.MainWindow { DataContext = vm };
+        _mainViewModel = new MainViewModel(Dispatcher.CurrentDispatcher, _loggerFactory);
+        var window = new Views.MainWindow { DataContext = _mainViewModel };
         window.Show();
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _mainViewModel?.Dispose();
         _loggerFactory?.Dispose();
         Log.CloseAndFlush();
         base.OnExit(e);

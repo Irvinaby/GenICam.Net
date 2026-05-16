@@ -7,11 +7,11 @@ using Microsoft.Extensions.Logging;
 namespace CameraViewer.ViewModels;
 
 /// <summary>
-/// Manages GigE Vision camera discovery and selection.
-/// Exposes the discovered camera list and the currently selected camera.
+/// Manages camera discovery and selection UI state.
 /// </summary>
 public sealed partial class CameraViewModel : ObservableObject
 {
+    private readonly GigECameraDiscoveryService _discoveryService;
     private readonly ILogger<CameraViewModel> _logger;
 
     [ObservableProperty]
@@ -28,8 +28,9 @@ public sealed partial class CameraViewModel : ObservableObject
 
     public event EventHandler<GigECameraInfo>? CameraConnectRequested;
 
-    public CameraViewModel(ILogger<CameraViewModel> logger)
+    public CameraViewModel(GigECameraDiscoveryService discoveryService, ILogger<CameraViewModel> logger)
     {
+        _discoveryService = discoveryService;
         _logger = logger;
     }
 
@@ -37,22 +38,17 @@ public sealed partial class CameraViewModel : ObservableObject
     private async Task DiscoverAsync()
     {
         IsDiscovering = true;
-        StatusMessage = "Discovering cameras…";
+        StatusMessage = "Discovering cameras...";
         Cameras.Clear();
         SelectedCamera = null;
         _logger.LogInformation("Starting camera discovery");
 
         try
         {
-            using var transport = new UdpTransportAdapter();
-            using var discovery = new GigEDiscovery(transport);
-            var cameras = await discovery.DiscoverAsync(timeoutMs: 3000);
+            var cameras = await _discoveryService.DiscoverAsync(timeoutMs: 3000);
 
             foreach (var cam in cameras)
-            {
-                _logger.LogInformation("Discovered camera: {Vendor} {Model} at {IpAddress}", cam.ManufacturerName, cam.ModelName, cam.IpAddress);
                 Cameras.Add(cam);
-            }
 
             StatusMessage = cameras.Count == 0
                 ? "No cameras found. Check network and try again."
