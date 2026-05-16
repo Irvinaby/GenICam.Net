@@ -6,7 +6,7 @@ namespace GenICam.Net.GigEVision.Gvsp;
 /// <summary>
 /// Converts GVSP image payloads into UI-neutral display buffers.
 /// </summary>
-public sealed class GvspDisplayConverter
+public sealed class GvspDisplayConverter : IGvspDisplayConverter
 {
     private readonly ILogger<GvspDisplayConverter> _logger;
 

@@ -6,7 +6,7 @@ namespace GenICam.Net.GigEVision.Gvcp;
 /// <summary>
 /// Application-level discovery facade for GigE Vision cameras.
 /// </summary>
-public sealed class GigECameraDiscoveryService
+public sealed class GigECameraDiscoveryService : IGigECameraDiscoveryService
 {
     private readonly ILogger<GigECameraDiscoveryService> _logger;
 

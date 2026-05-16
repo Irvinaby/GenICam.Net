@@ -10,7 +10,7 @@ namespace GenICam.Net.GigEVision.Gvcp;
 /// <summary>
 /// Owns the GVCP connection, GenICam node map, heartbeat, and acquisition setup for one GigE Vision camera.
 /// </summary>
-public sealed class GigECameraSession : IDisposable
+public sealed class GigECameraSession : IGigECameraSession
 {
     private const int HeartbeatTimeoutMs = 30000;
     private const int GvcpBusyRetryCount = 5;
@@ -37,6 +37,8 @@ public sealed class GigECameraSession : IDisposable
     public GigECameraInfo Camera => _camera;
 
     public NodeMap NodeMap { get; }
+
+    INodeMap IGigECameraSession.NodeMap => NodeMap;
 
     public static async Task<GigECameraSession> ConnectAsync(
         GigECameraInfo camera,

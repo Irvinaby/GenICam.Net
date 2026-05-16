@@ -11,7 +11,7 @@ namespace CameraViewer.ViewModels;
 /// </summary>
 public sealed partial class CameraViewModel : ObservableObject
 {
-    private readonly GigECameraDiscoveryService _discoveryService;
+    private readonly IGigECameraDiscoveryService _discoveryService;
     private readonly ILogger<CameraViewModel> _logger;
 
     [ObservableProperty]
@@ -28,7 +28,7 @@ public sealed partial class CameraViewModel : ObservableObject
 
     public event EventHandler<GigECameraInfo>? CameraConnectRequested;
 
-    public CameraViewModel(GigECameraDiscoveryService discoveryService, ILogger<CameraViewModel> logger)
+    public CameraViewModel(IGigECameraDiscoveryService discoveryService, ILogger<CameraViewModel> logger)
     {
         _discoveryService = discoveryService;
         _logger = logger;

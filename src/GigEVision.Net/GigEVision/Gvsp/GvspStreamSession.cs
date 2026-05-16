@@ -9,7 +9,7 @@ namespace GenICam.Net.GigEVision.Gvsp;
 /// <summary>
 /// Owns the UDP transport and GVSP receive loop for one stream channel.
 /// </summary>
-public sealed class GvspStreamSession : IDisposable
+public sealed class GvspStreamSession : IGvspStreamSession
 {
     private readonly ILogger<GvspStreamSession> _logger;
     private CountingUdpTransport? _streamTransport;

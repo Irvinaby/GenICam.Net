@@ -1,7 +1,8 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Threading;
-using CameraViewer.ViewModels;
+using Autofac;
+using CameraViewer.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Serilog;
 
@@ -10,7 +11,7 @@ namespace CameraViewer;
 public partial class App : Application
 {
     private ILoggerFactory? _loggerFactory;
-    private MainViewModel? _mainViewModel;
+    private IContainer? _container;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -31,14 +32,17 @@ public partial class App : Application
                 .AddSerilog(dispose: true);
         });
 
-        _mainViewModel = new MainViewModel(Dispatcher.CurrentDispatcher, _loggerFactory);
-        var window = new Views.MainWindow { DataContext = _mainViewModel };
+        var builder = new ContainerBuilder();
+        builder.RegisterModule(new CameraViewerModule(Dispatcher.CurrentDispatcher, _loggerFactory));
+        _container = builder.Build();
+
+        var window = _container.Resolve<Views.MainWindow>();
         window.Show();
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
-        _mainViewModel?.Dispose();
+        _container?.Dispose();
         _loggerFactory?.Dispose();
         Log.CloseAndFlush();
         base.OnExit(e);

@@ -1,8 +1,6 @@
-using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using GenICam.Net.GigEVision.Gvcp;
-using GenICam.Net.GigEVision.Gvsp;
 using Microsoft.Extensions.Logging;
 
 namespace CameraViewer.ViewModels;
@@ -16,7 +14,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private const int DefaultStreamPort = 50000;
 
     private readonly ILogger<MainViewModel> _logger;
-    private readonly ILogger<GigECameraSession> _sessionLogger;
+    private readonly IGigECameraSessionFactory _cameraSessionFactory;
 
     [ObservableProperty]
     private string _title = "CameraViewer";
@@ -31,21 +29,20 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public NodeTreeViewModel NodeTreeVm { get; }
     public StreamViewModel StreamVm { get; }
 
-    private GigECameraSession? _cameraSession;
+    private IGigECameraSession? _cameraSession;
 
-    public MainViewModel(Dispatcher dispatcher, ILoggerFactory loggerFactory)
+    public MainViewModel(
+        CameraViewModel cameraVm,
+        NodeTreeViewModel nodeTreeVm,
+        StreamViewModel streamVm,
+        IGigECameraSessionFactory cameraSessionFactory,
+        ILogger<MainViewModel> logger)
     {
-        _logger = loggerFactory.CreateLogger<MainViewModel>();
-        _sessionLogger = loggerFactory.CreateLogger<GigECameraSession>();
-        CameraVm = new CameraViewModel(
-            new GigECameraDiscoveryService(loggerFactory.CreateLogger<GigECameraDiscoveryService>()),
-            loggerFactory.CreateLogger<CameraViewModel>());
-        NodeTreeVm = new NodeTreeViewModel(loggerFactory.CreateLogger<NodeViewModel>());
-        StreamVm = new StreamViewModel(
-            dispatcher,
-            loggerFactory.CreateLogger<StreamViewModel>(),
-            loggerFactory.CreateLogger<GvspStreamSession>(),
-            loggerFactory.CreateLogger<GvspDisplayConverter>());
+        CameraVm = cameraVm;
+        NodeTreeVm = nodeTreeVm;
+        StreamVm = streamVm;
+        _cameraSessionFactory = cameraSessionFactory;
+        _logger = logger;
 
         StreamVm.PropertyChanged += (_, args) =>
         {
@@ -98,7 +95,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _cameraSession = null;
 
         ConnectionStatus = $"Loading camera XML from {cam.IpAddress}...";
-        _cameraSession = await Task.Run(() => GigECameraSession.ConnectAsync(cam, logger: _sessionLogger));
+        _cameraSession = await Task.Run(() => _cameraSessionFactory.ConnectAsync(cam));
 
         NodeTreeVm.Load(_cameraSession.NodeMap);
 

@@ -16,8 +16,8 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
 {
     private readonly Dispatcher _dispatcher;
     private readonly ILogger<StreamViewModel> _logger;
-    private readonly GvspStreamSession _streamSession;
-    private readonly GvspDisplayConverter _displayConverter;
+    private readonly IGvspStreamSession _streamSession;
+    private readonly IGvspDisplayConverter _displayConverter;
     private readonly DispatcherTimer _statusTimer;
     private WriteableBitmap? _bitmap;
     private RenderRequest? _pendingRenderRequest;
@@ -62,13 +62,13 @@ public sealed partial class StreamViewModel : ObservableObject, IDisposable
     public StreamViewModel(
         Dispatcher dispatcher,
         ILogger<StreamViewModel> logger,
-        ILogger<GvspStreamSession>? streamLogger = null,
-        ILogger<GvspDisplayConverter>? converterLogger = null)
+        IGvspStreamSession streamSession,
+        IGvspDisplayConverter displayConverter)
     {
         _dispatcher = dispatcher;
         _logger = logger;
-        _streamSession = new GvspStreamSession(streamLogger);
-        _displayConverter = new GvspDisplayConverter(converterLogger);
+        _streamSession = streamSession;
+        _displayConverter = displayConverter;
         _streamSession.FrameReceived += OnFrameReceived;
         _streamSession.PacketStatsUpdated += OnPacketStatsUpdated;
         _statusTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
